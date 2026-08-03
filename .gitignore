@@ -1,2 +1,11 @@
 __pycache__/
 *.pyc
+.venv/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Generated exports / backups -- pnl.db is the source of truth
+PnL_Export_*.xlsx
+template.xlsx.bak*

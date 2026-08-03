@@ -56,11 +56,17 @@ def export_to_xlsx(template_path: Path, output_path: Path, year: int = 2026):
     # Map sheet name -> actual workbook sheet name (handles trailing spaces)
     sheet_lookup = {name.strip(): name for name in wb.sheetnames}
 
-    bic_sheets = ["BIC $6 $4", "BIC $4", "BIC $3", "BIC 1 DTE", "BIC Standard", "BIC Re-Entry"]
+    bic_sheets = [
+        "BIC $6 $4", "BIC $4", "BIC $3", "BIC 1 DTE", "BIC Standard", "BIC Re-Entry",
+        "BIC Touch", "BIC Stepped Touch", "BIC Early Entry",
+    ]
     total_components = [
         "All BICs", "Price Action IC", "Verticals", "Auto JSP", "Wed Thu RIC",
         "Lottery", "MOC IC", "WUGA", "MT BF", "Umbrella", "PM Umbrella",
-        "Vol Crush", "Lunch Vol C Umb", "LDOM",
+        "Vol Crush", "Lunch Vol C Umb", "LDOM", "1 DTE",
+        "3-4 Double Calendar", "FOMC - 0-2 Diagonal", "B-MLC-M", "Early Bird",
+        "LPV", "PM No Stop Umbrella", "Monday LCV", "AM VIX up IC no stop",
+        "Monday MT Flies", "MU Re-entry",
     ]
 
     for d, values in by_date.items():
@@ -102,7 +108,11 @@ def export_to_xlsx(template_path: Path, output_path: Path, year: int = 2026):
 
 
 def _quote_ref(sheet_name: str) -> str:
-    """Quote sheet names that contain spaces or special chars."""
-    if any(c in sheet_name for c in " $"):
-        return f"'{sheet_name}'"
-    return sheet_name
+    """Quote a sheet name for use in a formula reference.
+
+    Always quoting is valid in Excel even when not strictly required, and
+    avoids missing characters (e.g. hyphens, as in "B-MLC-M") that are
+    invalid in an unquoted sheet-name token but don't match a narrower
+    space/$-only check.
+    """
+    return f"'{sheet_name}'"

@@ -96,6 +96,11 @@ SEED_MAPPINGS = {
     "BIC Re-Entry":                 "BIC Re-Entry",
     "JSP":                          "Verticals",
     "Short Call Vertical":          "Verticals",
+    # Endpoint-vocabulary labels (from tradesteward_fetch). Adjust if wrong.
+    "LCV 50/50":                    "Verticals",
+    "LCV":                          "Verticals",
+    "Bear - LPV 50/50":             "Verticals",
+    "Thursday RIC":                 "Wed Thu RIC",
     "WUGA":                         "WUGA",
     "MT Friday Theta Junkie":       "MT BF",
     "Umbrella Delta":               "Umbrella",
@@ -239,6 +244,40 @@ def get_years_with_data():
             "FROM daily_pnl ORDER BY y"
         ).fetchall()
     return [r["y"] for r in rows]
+
+
+def add_strategy(sheet_name: str, include_in_total: int = 1, include_in_all_bics: int = 0) -> int:
+    """Create a new strategy sheet if it doesn't already exist. Returns its id."""
+    with get_db() as conn:
+        row = conn.execute("SELECT id FROM strategies WHERE sheet_name = ?", (sheet_name,)).fetchone()
+        if row:
+            return row[0]
+        max_order = conn.execute("SELECT COALESCE(MAX(display_order), 0) FROM strategies").fetchone()[0]
+        cur = conn.execute(
+            "INSERT INTO strategies (sheet_name, display_order, include_in_total, include_in_all_bics) VALUES (?, ?, ?, ?)",
+            (sheet_name, max_order + 10, include_in_total, include_in_all_bics),
+        )
+        return cur.lastrowid
+
+
+def add_to_day(trade_date: date, sheet_name: str, amount: float) -> float:
+    """Add `amount` to whatever's already saved for sheet_name on trade_date
+    (0 if none), atomically within one connection. Returns the new total."""
+    with get_db() as conn:
+        sid = conn.execute("SELECT id FROM strategies WHERE sheet_name = ?", (sheet_name,)).fetchone()
+        if not sid:
+            raise ValueError(f"Unknown sheet: {sheet_name}")
+        row = conn.execute(
+            "SELECT value FROM daily_pnl WHERE trade_date = ? AND strategy_id = ?",
+            (trade_date, sid[0]),
+        ).fetchone()
+        new_total = (row[0] if row else 0.0) + amount
+        conn.execute("DELETE FROM daily_pnl WHERE trade_date = ? AND strategy_id = ?", (trade_date, sid[0]))
+        conn.execute(
+            "INSERT INTO daily_pnl (trade_date, strategy_id, value, note) VALUES (?, ?, ?, NULL)",
+            (trade_date, sid[0], new_total),
+        )
+        return new_total
 
 
 def add_mapping(label: str, sheet_name: str):
