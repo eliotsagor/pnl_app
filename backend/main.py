@@ -5,9 +5,18 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+import tradesteward_fetch as tsf
 from backend.routers import calendar, days, export, mappings, tradesteward
 
 app = FastAPI(title="Daily P&L Tracker API")
+
+
+@app.on_event("shutdown")
+def _close_tradesteward_session():
+    # Releases the shared browser session (see tradesteward_fetch.get_shared_client)
+    # kept open across fetches so repeated single-day fetches don't each re-trigger
+    # TradeSteward's login challenge.
+    tsf.close_shared_client()
 
 if os.environ.get("PNL_DEV"):
     app.add_middleware(

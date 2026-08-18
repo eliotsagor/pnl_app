@@ -19,3 +19,26 @@ export interface YearView {
   sheets: string[];
   matrix: Record<string, Record<string, number>>; // sheet_name -> {month(1-12 as string): total}
 }
+
+export interface StrategyYearView {
+  days: Record<string, Record<string, number>>; // day(1-31 as string) -> {month(1-12 as string): value}
+  weekday: Record<string, { total: number; count: number }>; // weekday(0=Mon..6=Sun as string) -> totals
+}
+
+export interface Position {
+  serial: number;
+  strategy: string;
+  bot_name: string;
+  account: string;
+  symbol: string;
+  open_time: string;
+  days_in_trade: number | null;
+  legs: string[];
+  stop_target: string;
+  profit_target: string;
+  open_price: string; // HTML string, e.g. "Open:&#10;$1.30 Credit<p...>Current:&#10;$1.73 Debit"
+  profit_pct: string;
+  profit_pct_style: "profit" | "loss" | "";
+  profit_dollars: string;
+  profit_dollars_style: "profit" | "loss" | "";
+}
