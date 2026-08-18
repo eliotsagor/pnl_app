@@ -16,6 +16,7 @@ export const tradestewardApi = {
   fetchDay: (tradeDate: string) => api.post<{ job_id: string }>("/tradesteward/fetch-day", { trade_date: tradeDate }),
   backfill: (start: string, end?: string) =>
     api.post<{ job_id: string }>("/tradesteward/backfill", { start, end: end ?? null }),
+  fetchPositions: () => api.post<{ job_id: string }>("/tradesteward/positions", {}),
   jobStatus: (jobId: string) => api.get<Job>(`/jobs/${jobId}`),
   cancelJob: (jobId: string) => api.post<{ ok: boolean }>(`/jobs/${jobId}/cancel`),
 };

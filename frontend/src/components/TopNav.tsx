@@ -7,12 +7,14 @@ import CalendarMonthIcon from "@mui/icons-material/CalendarMonth";
 import TableChartIcon from "@mui/icons-material/TableChart";
 import RouteIcon from "@mui/icons-material/Route";
 import FileDownloadIcon from "@mui/icons-material/FileDownload";
+import ShowChartIcon from "@mui/icons-material/ShowChart";
 
 const NAV_ITEMS = [
   { path: "/enter-day", label: "Enter Day", icon: <EditCalendarIcon fontSize="small" /> },
   { path: "/custom-trades", label: "Custom Trades", icon: <CalculateIcon fontSize="small" /> },
   { path: "/calendar", label: "Calendar", icon: <CalendarMonthIcon fontSize="small" /> },
   { path: "/year-view", label: "Year View", icon: <TableChartIcon fontSize="small" /> },
+  { path: "/positions", label: "Positions", icon: <ShowChartIcon fontSize="small" /> },
   { path: "/mappings", label: "Mappings", icon: <RouteIcon fontSize="small" /> },
   { path: "/export", label: "Export", icon: <FileDownloadIcon fontSize="small" /> },
 ];
@@ -20,7 +22,9 @@ const NAV_ITEMS = [
 export default function TopNav() {
   const navigate = useNavigate();
   const location = useLocation();
-  const active = NAV_ITEMS.find((n) => location.pathname.startsWith(n.path))?.path ?? "/enter-day";
+  const active = location.pathname.startsWith("/strategy-year")
+    ? "/year-view"
+    : NAV_ITEMS.find((n) => location.pathname.startsWith(n.path))?.path ?? "/enter-day";
 
   return (
     <Box sx={{ maxWidth: 1600, mx: "auto", px: 3, pt: 3 }}>

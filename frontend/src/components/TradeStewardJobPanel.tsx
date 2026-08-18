@@ -73,7 +73,8 @@ export default function TradeStewardJobPanel({
 
       {job?.status === "awaiting_login" && (
         <Alert severity="info" icon={<CircularProgress size={18} />} sx={{ mt: 2 }}>
-          A TradeSteward sign-in window opened on your desktop — complete passkey/password there. Waiting…
+          A TradeSteward sign-in window opened on your desktop — if a Windows Security passkey prompt appears, click
+          Cancel on it. Login then completes automatically. Waiting…
         </Alert>
       )}
 

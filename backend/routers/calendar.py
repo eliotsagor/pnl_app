@@ -18,6 +18,36 @@ def year_view(year: int):
     return {"sheets": sheets, "matrix": matrix}
 
 
+@router.get("/strategy-year/{year}/{sheet_name}")
+def strategy_year(year: int, sheet_name: str):
+    matrix = database.get_strategy_year_matrix(year, sheet_name)
+    weekday = database.get_strategy_weekday_totals(year, sheet_name)
+    return {
+        "days": {str(d): {str(m): v for m, v in months.items()} for d, months in matrix.items()},
+        "weekday": {str(k): v for k, v in weekday.items()},
+    }
+
+
+@router.get("/total-year/{year}")
+def total_year(year: int):
+    matrix = database.get_aggregate_year_matrix(year, "include_in_total")
+    weekday = database.get_aggregate_weekday_totals(year, "include_in_total")
+    return {
+        "days": {str(d): {str(m): v for m, v in months.items()} for d, months in matrix.items()},
+        "weekday": {str(k): v for k, v in weekday.items()},
+    }
+
+
+@router.get("/all-bics-year/{year}")
+def all_bics_year(year: int):
+    matrix = database.get_aggregate_year_matrix(year, "include_in_all_bics")
+    weekday = database.get_aggregate_weekday_totals(year, "include_in_all_bics")
+    return {
+        "days": {str(d): {str(m): v for m, v in months.items()} for d, months in matrix.items()},
+        "weekday": {str(k): v for k, v in weekday.items()},
+    }
+
+
 @router.get("/years")
 def years():
     return database.get_years_with_data()

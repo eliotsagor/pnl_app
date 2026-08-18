@@ -145,6 +145,7 @@ export default function EnterDayPage() {
           </Typography>
 
           <TradeStewardJobPanel
+            key={`fetch-day-${isoDate}`}
             mode="fetch-day"
             tradeDate={isoDate}
             buttonLabel="Fetch this day"

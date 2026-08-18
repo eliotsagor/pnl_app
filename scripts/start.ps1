@@ -17,4 +17,8 @@ if (-not (Test-Path $dist)) {
 
 Write-Host "Starting server on http://localhost:8000 ..."
 Start-Process "http://localhost:8000"
-.\.venv\Scripts\python.exe -m uvicorn backend.main:app --port 8000
+$log = Join-Path $root "server.log"
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+.\.venv\Scripts\python.exe -m uvicorn backend.main:app --port 8000 2>&1 | Out-File -FilePath $log -Encoding utf8
+$ErrorActionPreference = $prevEap

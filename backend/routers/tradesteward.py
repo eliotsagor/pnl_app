@@ -18,7 +18,12 @@ router = APIRouter(tags=["tradesteward"])
 
 def _on_waiting(job_id: str):
     jobs.update_job(job_id, status="awaiting_login")
-    jobs.append_log(job_id, "Sign-in window opened on your desktop — waiting for login...")
+    jobs.append_log(
+        job_id,
+        "Sign-in window opened on your desktop — if a Windows Security "
+        "passkey prompt appears, click Cancel on it; login then completes "
+        "automatically.",
+    )
 
 
 def _run_fetch_day(job_id: str, day: date):
@@ -49,6 +54,27 @@ def fetch_day(body: FetchDayRequest):
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
     threading.Thread(target=_run_fetch_day, args=(job.id, body.trade_date), daemon=True).start()
+    return {"job_id": job.id}
+
+
+def _run_fetch_positions(job_id: str):
+    try:
+        jobs.update_job(job_id, status="running")
+        positions = tsf.fetch_open_positions(headless=False, on_waiting=lambda: _on_waiting(job_id))
+        jobs.update_job(job_id, status="done", result={"positions": positions})
+    except Exception as e:
+        jobs.update_job(job_id, status="error", error=str(e))
+    finally:
+        jobs.finish_job(job_id)
+
+
+@router.post("/tradesteward/positions")
+def fetch_positions():
+    try:
+        job = jobs.create_job("fetch-positions")
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    threading.Thread(target=_run_fetch_positions, args=(job.id,), daemon=True).start()
     return {"job_id": job.id}
 
 

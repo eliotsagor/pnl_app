@@ -237,6 +237,91 @@ def get_year_matrix(year: int):
     return matrix, order
 
 
+def get_strategy_year_matrix(year: int, sheet_name: str):
+    """Return {day(int, 1-31): {month(int, 1-12): value}} for one strategy in a year."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT CAST(strftime('%d', p.trade_date) AS INTEGER) AS day,
+                   CAST(strftime('%m', p.trade_date) AS INTEGER) AS month,
+                   p.value
+            FROM daily_pnl p JOIN strategies s ON p.strategy_id = s.id
+            WHERE s.sheet_name = ? AND strftime('%Y', p.trade_date) = ?
+        """, (sheet_name, str(year))).fetchall()
+    matrix = {}
+    for r in rows:
+        matrix.setdefault(int(r["day"]), {})[int(r["month"])] = float(r["value"])
+    return matrix
+
+
+def get_strategy_weekday_totals(year: int, sheet_name: str):
+    """Return {weekday(0=Mon..6=Sun): {'total': float, 'count': int}} for one
+    strategy in a year. SQLite's strftime('%w') is 0=Sunday, so we remap to
+    0=Monday to match a standard trading-week display."""
+    with get_db() as conn:
+        rows = conn.execute("""
+            SELECT CAST(strftime('%w', p.trade_date) AS INTEGER) AS sqlite_dow, p.value
+            FROM daily_pnl p JOIN strategies s ON p.strategy_id = s.id
+            WHERE s.sheet_name = ? AND strftime('%Y', p.trade_date) = ?
+        """, (sheet_name, str(year))).fetchall()
+    out = {i: {"total": 0.0, "count": 0} for i in range(7)}
+    for r in rows:
+        mon0 = (r["sqlite_dow"] + 6) % 7  # SQLite 0=Sun -> 0=Mon
+        out[mon0]["total"] += r["value"]
+        out[mon0]["count"] += 1
+    return out
+
+
+def get_aggregate_year_matrix(year: int, flag_column: str):
+    """Return {day(int, 1-31): {month(int, 1-12): value}} summed across all
+    strategies where the given boolean flag column is set. Per-day values
+    from multiple strategies on the same date are summed into a single
+    figure, mirroring a strategy's own year matrix shape so the same UI can
+    render it.
+
+    "All BICs" is never itself entered/saved as data (see DayEditorForm,
+    which computes it live from the include_in_all_bics strategies and
+    excludes it from the input form) so for include_in_total we must also
+    fold in the include_in_all_bics strategies, since the individual BIC
+    strategies are flagged include_in_total=0 on the assumption their
+    subtotal is covered elsewhere."""
+    if flag_column not in ("include_in_total", "include_in_all_bics"):
+        raise ValueError(f"invalid flag_column: {flag_column}")
+    condition = "(s.include_in_total = 1 OR s.include_in_all_bics = 1)" if flag_column == "include_in_total" else "s.include_in_all_bics = 1"
+    with get_db() as conn:
+        rows = conn.execute(f"""
+            SELECT CAST(strftime('%d', p.trade_date) AS INTEGER) AS day,
+                   CAST(strftime('%m', p.trade_date) AS INTEGER) AS month,
+                   SUM(p.value) AS total
+            FROM daily_pnl p JOIN strategies s ON p.strategy_id = s.id
+            WHERE {condition} AND strftime('%Y', p.trade_date) = ?
+            GROUP BY day, month
+        """, (str(year),)).fetchall()
+    matrix = {}
+    for r in rows:
+        matrix.setdefault(int(r["day"]), {})[int(r["month"])] = float(r["total"])
+    return matrix
+
+
+def get_aggregate_weekday_totals(year: int, flag_column: str):
+    """Weekday totals (0=Mon..6=Sun) summed across all strategies where the
+    given boolean flag column is set. See get_aggregate_year_matrix."""
+    if flag_column not in ("include_in_total", "include_in_all_bics"):
+        raise ValueError(f"invalid flag_column: {flag_column}")
+    condition = "(s.include_in_total = 1 OR s.include_in_all_bics = 1)" if flag_column == "include_in_total" else "s.include_in_all_bics = 1"
+    with get_db() as conn:
+        rows = conn.execute(f"""
+            SELECT CAST(strftime('%w', p.trade_date) AS INTEGER) AS sqlite_dow, p.value
+            FROM daily_pnl p JOIN strategies s ON p.strategy_id = s.id
+            WHERE {condition} AND strftime('%Y', p.trade_date) = ?
+        """, (str(year),)).fetchall()
+    out = {i: {"total": 0.0, "count": 0} for i in range(7)}
+    for r in rows:
+        mon0 = (r["sqlite_dow"] + 6) % 7  # SQLite 0=Sun -> 0=Mon
+        out[mon0]["total"] += r["value"]
+        out[mon0]["count"] += 1
+    return out
+
+
 def get_years_with_data():
     with get_db() as conn:
         rows = conn.execute(
