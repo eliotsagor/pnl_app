@@ -8,6 +8,7 @@ import TableChartIcon from "@mui/icons-material/TableChart";
 import RouteIcon from "@mui/icons-material/Route";
 import FileDownloadIcon from "@mui/icons-material/FileDownload";
 import ShowChartIcon from "@mui/icons-material/ShowChart";
+import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 
 const NAV_ITEMS = [
   { path: "/enter-day", label: "Enter Day", icon: <EditCalendarIcon fontSize="small" /> },
@@ -15,6 +16,7 @@ const NAV_ITEMS = [
   { path: "/calendar", label: "Calendar", icon: <CalendarMonthIcon fontSize="small" /> },
   { path: "/year-view", label: "Year View", icon: <TableChartIcon fontSize="small" /> },
   { path: "/positions", label: "Positions", icon: <ShowChartIcon fontSize="small" /> },
+  { path: "/risk", label: "Risk", icon: <WarningAmberIcon fontSize="small" /> },
   { path: "/mappings", label: "Mappings", icon: <RouteIcon fontSize="small" /> },
   { path: "/export", label: "Export", icon: <FileDownloadIcon fontSize="small" /> },
 ];

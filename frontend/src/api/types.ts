@@ -25,6 +25,21 @@ export interface StrategyYearView {
   weekday: Record<string, { total: number; count: number }>; // weekday(0=Mon..6=Sun as string) -> totals
 }
 
+export interface StrikeRow {
+  type: "C" | "P";
+  strike: number;
+  qty: number;
+  capture: number;
+  at_risk: number;
+  positions: number;
+}
+
+export interface SpxQuote {
+  price?: number;
+  change?: number | null;
+  change_pct?: number | null;
+}
+
 export interface Position {
   serial: number;
   strategy: string;
