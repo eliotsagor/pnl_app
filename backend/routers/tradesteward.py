@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException
 import database
 import ingest
 import parser as ss_parser
+import quotes
 import tradesteward_fetch as tsf
 from backend import jobs
 from backend.schemas import BackfillRequest, FetchDayRequest
@@ -75,6 +76,32 @@ def fetch_positions():
     except RuntimeError as e:
         raise HTTPException(status_code=409, detail=str(e))
     threading.Thread(target=_run_fetch_positions, args=(job.id,), daemon=True).start()
+    return {"job_id": job.id}
+
+
+def _run_fetch_risk(job_id: str):
+    try:
+        jobs.update_job(job_id, status="running")
+        positions = tsf.fetch_open_positions(headless=False, on_waiting=lambda: _on_waiting(job_id))
+        strikes = tsf.aggregate_short_strikes(positions)
+        try:
+            quote = quotes.spx_quote()
+        except Exception:
+            quote = {}
+        jobs.update_job(job_id, status="done", result={"strikes": strikes, "quote": quote})
+    except Exception as e:
+        jobs.update_job(job_id, status="error", error=str(e))
+    finally:
+        jobs.finish_job(job_id)
+
+
+@router.post("/tradesteward/risk")
+def fetch_risk():
+    try:
+        job = jobs.create_job("fetch-risk")
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    threading.Thread(target=_run_fetch_risk, args=(job.id,), daemon=True).start()
     return {"job_id": job.id}
 
 

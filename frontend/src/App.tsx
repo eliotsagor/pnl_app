@@ -10,6 +10,7 @@ import StrategyYearPage from "./pages/StrategyYearPage";
 import MappingsPage from "./pages/MappingsPage";
 import ExportPage from "./pages/ExportPage";
 import PositionsPage from "./pages/PositionsPage";
+import RiskDashboardPage from "./pages/RiskDashboardPage";
 
 export default function App() {
   return (
@@ -28,6 +29,7 @@ export default function App() {
         <Route path="/all-bics-year/:year" element={<StrategyYearPage kind="all-bics" />} />
         <Route path="/mappings" element={<MappingsPage />} />
         <Route path="/positions" element={<PositionsPage />} />
+        <Route path="/risk" element={<RiskDashboardPage />} />
         <Route path="/export" element={<ExportPage />} />
       </Routes>
     </>

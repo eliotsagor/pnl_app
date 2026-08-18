@@ -55,6 +55,7 @@ MONTH_ABBR = {
     "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
 }
 _OPEN_TIME_RE = re.compile(r"^\w+ (\w+) (\d+) ")
+_LEG_RE = re.compile(r"^(-?\d+)\s+\S+\s+.*?(\d+(?:\.\d+)?)([CP])$")
 
 ENDPOINT = "https://www.tradesteward.com/ajax"
 DASHBOARD_URL = "https://www.tradesteward.com/trading/"  # logged-in dashboard (redirects to login if signed out)
@@ -147,9 +148,80 @@ def extract_positions(payload: dict) -> list[dict]:
                 "profit_pct_style": pct_info.get("style", ""),
                 "profit_dollars": dollars.get("value", ""),
                 "profit_dollars_style": dollars.get("style", ""),
+                "max_profit": dollars.get("maxProfit", ""),
+                "max_loss": dollars.get("maxLoss", ""),
             }
         )
     return positions
+
+
+def parse_leg(leg: str) -> dict | None:
+    """'-1 SPX Aug 18 2026 7695P' -> {'qty': -1, 'strike': 7695.0, 'type': 'P'}.
+    None if the string doesn't match the expected '<signed qty> <symbol> ... <strike><C|P>' shape."""
+    m = _LEG_RE.match(leg.strip())
+    if not m:
+        return None
+    return {"qty": int(m.group(1)), "strike": float(m.group(2)), "type": m.group(3)}
+
+
+def short_strikes_by_side(position: dict) -> dict[str, list[dict]]:
+    """Split a position's short (qty < 0) legs into {'C': [...], 'P': [...]}."""
+    out: dict[str, list[dict]] = {"C": [], "P": []}
+    for leg_str in position.get("legs", []):
+        leg = parse_leg(leg_str)
+        if leg and leg["qty"] < 0:
+            out[leg["type"]].append(leg)
+    return out
+
+
+def aggregate_short_strikes(positions: list[dict]) -> list[dict]:
+    """Group every open position's short legs by strike, splitting each
+    position's capture (max_profit $) and at-risk (max_loss $) between its
+    call side and put side.
+
+    - A one-sided position (short legs on only one side -- e.g. a vertical)
+      puts its full capture/at-risk on that side.
+    - A two-sided position (short legs on both call and put side -- e.g. an
+      iron condor) splits 50/50 between the two sides, since TradeSteward
+      only reports capture/at-risk per whole position, not per leg.
+
+    Within a side, a position's $ is further split across its legs there in
+    proportion to each leg's short quantity (matters for e.g. an unbalanced
+    1x2 spread).
+
+    Returns strike rows sorted (puts first, then calls, each ascending by
+    strike), each with combined qty and summed capture/at-risk $ from every
+    position sharing that strike.
+    """
+    rows: dict[tuple[str, float], dict] = {}
+    for pos in positions:
+        sides = short_strikes_by_side(pos)
+        has_call = bool(sides["C"])
+        has_put = bool(sides["P"])
+        share = 0.5 if (has_call and has_put) else 1.0
+
+        capture = abs(parse_money(pos.get("max_profit", "0") or "0"))
+        at_risk = abs(parse_money(pos.get("max_loss", "0") or "0"))
+
+        for side, legs in sides.items():
+            if not legs:
+                continue
+            side_qty = sum(-leg["qty"] for leg in legs)  # short qty as positive contracts
+            for leg in legs:
+                key = (side, leg["strike"])
+                row = rows.setdefault(
+                    key,
+                    {"type": side, "strike": leg["strike"], "qty": 0, "capture": 0.0, "at_risk": 0.0, "positions": 0},
+                )
+                leg_qty = -leg["qty"]
+                row["qty"] += leg_qty
+                if side_qty:
+                    frac = share * (leg_qty / side_qty)
+                    row["capture"] += capture * frac
+                    row["at_risk"] += at_risk * frac
+                row["positions"] += 1
+
+    return sorted(rows.values(), key=lambda r: (r["type"] == "C", r["strike"]))
 
 
 def trades_opened_on(trades: list[dict], day: date) -> list[dict]:
