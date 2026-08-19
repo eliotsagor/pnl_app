@@ -176,22 +176,30 @@ def short_strikes_by_side(position: dict) -> dict[str, list[dict]]:
 
 def aggregate_short_strikes(positions: list[dict]) -> list[dict]:
     """Group every open position's short legs by strike, splitting each
-    position's capture (max_profit $) and at-risk (max_loss $) between its
-    call side and put side.
+    position's captured-so-far $ (current running P&L), remaining-to-capture
+    $ (max profit ceiling minus what's already captured), and at-risk $
+    (max loss) between its call side and put side.
+
+    A position's running P&L (profit_dollars) climbs from 0 toward its
+    max_profit ceiling as the trade decays favorably -- "captured so far" is
+    that running value (floored at 0; a position currently underwater hasn't
+    captured anything yet), and "remaining" is max_profit minus that, which
+    naturally exceeds max_profit while the position is underwater (there's
+    more than the full ceiling left to go until breakeven, then capture).
 
     - A one-sided position (short legs on only one side -- e.g. a vertical)
-      puts its full capture/at-risk on that side.
+      puts its full captured/remaining/at-risk on that side.
     - A two-sided position (short legs on both call and put side -- e.g. an
       iron condor) splits 50/50 between the two sides, since TradeSteward
-      only reports capture/at-risk per whole position, not per leg.
+      only reports these figures per whole position, not per leg.
 
     Within a side, a position's $ is further split across its legs there in
     proportion to each leg's short quantity (matters for e.g. an unbalanced
     1x2 spread).
 
     Returns strike rows sorted (puts first, then calls, each ascending by
-    strike), each with combined qty and summed capture/at-risk $ from every
-    position sharing that strike.
+    strike), each with combined qty and summed $ from every position sharing
+    that strike.
     """
     rows: dict[tuple[str, float], dict] = {}
     for pos in positions:
@@ -200,8 +208,10 @@ def aggregate_short_strikes(positions: list[dict]) -> list[dict]:
         has_put = bool(sides["P"])
         share = 0.5 if (has_call and has_put) else 1.0
 
-        capture = abs(parse_money(pos.get("max_profit", "0") or "0"))
+        max_profit = abs(parse_money(pos.get("max_profit", "0") or "0"))
         at_risk = abs(parse_money(pos.get("max_loss", "0") or "0"))
+        captured = max(parse_money(pos.get("profit_dollars", "0") or "0"), 0.0)
+        remaining = max_profit - captured
 
         for side, legs in sides.items():
             if not legs:
@@ -211,13 +221,22 @@ def aggregate_short_strikes(positions: list[dict]) -> list[dict]:
                 key = (side, leg["strike"])
                 row = rows.setdefault(
                     key,
-                    {"type": side, "strike": leg["strike"], "qty": 0, "capture": 0.0, "at_risk": 0.0, "positions": 0},
+                    {
+                        "type": side,
+                        "strike": leg["strike"],
+                        "qty": 0,
+                        "captured": 0.0,
+                        "remaining": 0.0,
+                        "at_risk": 0.0,
+                        "positions": 0,
+                    },
                 )
                 leg_qty = -leg["qty"]
                 row["qty"] += leg_qty
                 if side_qty:
                     frac = share * (leg_qty / side_qty)
-                    row["capture"] += capture * frac
+                    row["captured"] += captured * frac
+                    row["remaining"] += remaining * frac
                     row["at_risk"] += at_risk * frac
                 row["positions"] += 1
 
