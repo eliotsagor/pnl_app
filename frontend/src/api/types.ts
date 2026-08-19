@@ -29,7 +29,8 @@ export interface StrikeRow {
   type: "C" | "P";
   strike: number;
   qty: number;
-  capture: number;
+  captured: number;
+  remaining: number;
   at_risk: number;
   positions: number;
 }
@@ -38,6 +39,13 @@ export interface SpxQuote {
   price?: number;
   change?: number | null;
   change_pct?: number | null;
+}
+
+export interface ExpectedMove {
+  spot?: number;
+  atm_strike?: number;
+  straddle_mid?: number;
+  expected_move?: number;
 }
 
 export interface Position {

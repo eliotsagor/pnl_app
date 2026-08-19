@@ -7,3 +7,4 @@ uvicorn[standard]>=0.30.0
 python-multipart>=0.0.9
 keyring>=25.0.0
 yfinance>=0.2.40
+schwab-py>=1.5.0

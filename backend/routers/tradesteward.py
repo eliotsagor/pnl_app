@@ -10,6 +10,7 @@ import database
 import ingest
 import parser as ss_parser
 import quotes
+import schwab_client
 import tradesteward_fetch as tsf
 from backend import jobs
 from backend.schemas import BackfillRequest, FetchDayRequest
@@ -88,7 +89,13 @@ def _run_fetch_risk(job_id: str):
             quote = quotes.spx_quote()
         except Exception:
             quote = {}
-        jobs.update_job(job_id, status="done", result={"strikes": strikes, "quote": quote})
+        try:
+            expected_move = schwab_client.spx_expected_move_remaining()
+        except Exception:
+            expected_move = {}
+        jobs.update_job(
+            job_id, status="done", result={"strikes": strikes, "quote": quote, "expected_move": expected_move}
+        )
     except Exception as e:
         jobs.update_job(job_id, status="error", error=str(e))
     finally:

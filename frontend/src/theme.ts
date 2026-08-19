@@ -12,3 +12,4 @@ export const theme = createTheme({
 
 export const COLOR_GOOD = "#0ca30c";
 export const COLOR_CRITICAL = "#d03b3b";
+export const COLOR_WARNING = "#d0a13b";
