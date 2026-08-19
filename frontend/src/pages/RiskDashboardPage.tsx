@@ -272,7 +272,7 @@ export default function RiskDashboardPage() {
 
       {data && (calls.length > 0 || puts.length > 0) && (
       <Box sx={{ display: "flex", gap: 3, alignItems: "flex-start" }}>
-        <Box sx={{ flex: "1 1 auto", minWidth: 620 }}>
+        <Box sx={{ flex: "0 0 680px", minWidth: 0 }}>
         <TableContainer sx={{ border: "1px solid rgba(255,255,255,0.10)", borderRadius: "12px" }}>
           <Table size="small">
             <TableHead>
@@ -398,7 +398,7 @@ export default function RiskDashboardPage() {
         </Box>
 
         {data.positions && data.positions.some((p) => p.ev != null) && (
-        <Box sx={{ flex: "0 0 420px", minWidth: 0 }}>
+        <Box sx={{ flex: "1 1 auto", minWidth: 0 }}>
           <Typography variant="subtitle2" sx={{ mb: 1 }}>
             Expected value of holding
           </Typography>
