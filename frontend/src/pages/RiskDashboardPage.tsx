@@ -21,11 +21,16 @@ function fmtDistance(strike: number, spot: number) {
   return `${sign}${pts.toFixed(1)} (${sign}${pct.toFixed(1)}%)`;
 }
 
-// Closer to spot = more gamma risk = red; comfortably away = green.
-function bandTint(strike: number, spot: number): string {
-  const absPct = Math.abs((strike - spot) / spot) * 100;
-  if (absPct < 0.3) return `${COLOR_CRITICAL}1f`;
-  if (absPct < 0.7) return `${COLOR_WARNING}1f`;
+// Red: strike sits within today's expected move (spot could plausibly reach
+// it). Yellow: just outside, close enough to still watch. Green: comfortably
+// beyond the expected move. Distance is measured in EM-widths, so the bands
+// scale with how much the market is expected to move today rather than a
+// fixed point/percent cutoff.
+function bandTint(strike: number, spot: number, expectedMove: number | null): string {
+  if (!expectedMove) return `${COLOR_GOOD}1f`;
+  const emWidths = Math.abs(strike - spot) / expectedMove;
+  if (emWidths <= 1) return `${COLOR_CRITICAL}1f`;
+  if (emWidths <= 1.5) return `${COLOR_WARNING}1f`;
   return `${COLOR_GOOD}1f`;
 }
 
@@ -123,7 +128,7 @@ export default function RiskDashboardPage() {
     <TableRow
       key={`${r.type}${r.strike}`}
       hover
-      sx={{ bgcolor: hasQuote ? bandTint(r.strike, quote!.price!) : undefined }}
+      sx={{ bgcolor: hasQuote ? bandTint(r.strike, quote!.price!, em?.expected_move ?? null) : undefined }}
     >
       <TableCell sx={{ fontVariantNumeric: "tabular-nums" }}>
         {r.strike.toLocaleString()} {r.type}
