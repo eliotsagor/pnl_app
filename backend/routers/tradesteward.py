@@ -101,8 +101,29 @@ def _run_fetch_risk(job_id: str):
                     row["stop_probability"] = prob
         except Exception:
             pass  # stop-probability is best-effort; strikes still render without it
+        try:
+            greeks = schwab_client.net_greeks(positions)
+        except Exception:
+            greeks = {}
+        try:
+            position_ev = schwab_client.position_expected_values(positions)
+            for pos in positions:
+                ev = position_ev.get(pos.get("serial"))
+                if ev is not None:
+                    pos["stop_probability"] = ev["stop_probability"]
+                    pos["ev"] = ev["ev"]
+        except Exception:
+            pass  # EV is best-effort; positions still render without it
         jobs.update_job(
-            job_id, status="done", result={"strikes": strikes, "quote": quote, "expected_move": expected_move}
+            job_id,
+            status="done",
+            result={
+                "strikes": strikes,
+                "quote": quote,
+                "expected_move": expected_move,
+                "greeks": greeks,
+                "positions": positions,
+            },
         )
     except Exception as e:
         jobs.update_job(job_id, status="error", error=str(e))

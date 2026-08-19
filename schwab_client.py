@@ -318,11 +318,54 @@ def option_price_barrier_probability(spot: float, strike: float, side: str, cont
     return touch_probability(spot, implied_barrier, iv / 100, years)
 
 
+def _is_combined_stop_position(position: dict) -> bool:
+    """True for a position whose stop is managed as one unit across both
+    sides (a manually-triggered "Elmo" -- marked by "PAIC" in the bot name)
+    rather than two independently-stopped verticals.
+
+    "BIC" bots always stop each side separately even on the rare occasion
+    they open as one two-sided position object, so that name takes explicit
+    priority over "PAIC" if a name somehow contained both. Every other bot
+    in practice (BIC-style "CALL only"/"PUT only" bots) already opens as a
+    separate single-sided position per side anyway, so this only matters
+    for the rare 4-leg both-sides-in-one-position case."""
+    name = (position.get("bot_name") or "").upper()
+    if "BIC" in name:
+        return False
+    return "PAIC" in name
+
+
+def _leg_stop_probability(spot: float, contracts: dict, pos: dict, leg: dict, barrier: dict) -> float | None:
+    key = (leg["strike"], leg["type"])
+    if barrier["kind"] == "spot_price":
+        # Use the specific contract's own IV if we have it, else skip rather
+        # than guess with an unrelated vol figure.
+        contract = contracts.get(key)
+        iv = contract.get("volatility") if contract else None
+        if not iv or iv <= 0:
+            return None
+        return touch_probability(spot, barrier["price"], iv / 100, _time_to_expiry_years())
+    contract = contracts.get(key)
+    if not contract:
+        return None
+    return option_price_barrier_probability(spot, leg["strike"], leg["type"], contract, barrier["price"])
+
+
 def stop_probabilities_by_strike(positions: list[dict]) -> dict:
-    """{(strike, 'C'|'P'): probability} -- for every short leg across all
-    open positions, the probability its own stop actually triggers before
-    today's close. Where a strike has multiple legs (several positions
-    sharing it), returns their qty-weighted average probability.
+    """{(strike, 'C'|'P'): probability} -- the probability each short
+    strike's stop actually triggers before today's close. Where a strike has
+    multiple legs (several positions sharing it), returns their qty-weighted
+    average probability.
+
+    Most bots (BIC-style "CALL only"/"PUT only") already open as a separate
+    single-sided position per side, so their two legs' stops are genuinely
+    independent and each gets its own probability. A combined-stop position
+    (an "Elmo" -- see _is_combined_stop_position) manages both sides as one
+    unit, so both its strikes get the same combined probability: the chance
+    *either* side triggers, P = 1 - (1-p_call)(1-p_put), treating the two
+    touch events as roughly independent (a simplification -- SPX obviously
+    can't be both far up and far down at once -- but a reasonable estimate
+    without modeling their joint distribution).
 
     Skips legs with no parseable stop (resolve_stop_barrier returned None)
     or missing chain data for that specific contract -- callers should treat
@@ -338,6 +381,34 @@ def stop_probabilities_by_strike(positions: list[dict]) -> dict:
 
     weighted: dict[tuple[float, str], list[tuple[float, float]]] = {}  # key -> [(prob, weight), ...]
     for pos in positions:
+        sides = tsf.short_strikes_by_side(pos)
+        combined = _is_combined_stop_position(pos) and sides["C"] and sides["P"]
+
+        if combined:
+            # One stop_target shared by both sides -- compute each side's own
+            # probability against it, then fold them into a single combined
+            # probability applied to every short leg in this position.
+            leg_probs = []
+            for side_legs in sides.values():
+                for leg in side_legs:
+                    barrier = tsf.resolve_stop_barrier(pos, leg)
+                    if not barrier:
+                        continue
+                    p = _leg_stop_probability(spot, contracts, pos, leg, barrier)
+                    if p is not None:
+                        leg_probs.append(p)
+            if not leg_probs:
+                continue
+            combined_prob = 1.0
+            for p in leg_probs:
+                combined_prob *= 1 - p
+            combined_prob = 1 - combined_prob
+            for side_legs in sides.values():
+                for leg in side_legs:
+                    key = (leg["strike"], leg["type"])
+                    weighted.setdefault(key, []).append((combined_prob, -leg["qty"]))
+            continue
+
         for leg_str in pos.get("legs", []):
             leg = tsf.parse_leg(leg_str)
             if not leg or leg["qty"] >= 0:
@@ -345,26 +416,10 @@ def stop_probabilities_by_strike(positions: list[dict]) -> dict:
             barrier = tsf.resolve_stop_barrier(pos, leg)
             if not barrier:
                 continue
-            key = (leg["strike"], leg["type"])
-            qty = -leg["qty"]
-
-            if barrier["kind"] == "spot_price":
-                years = _time_to_expiry_years()
-                # Use the specific contract's own IV if we have it, else skip
-                # rather than guess with an unrelated vol figure.
-                contract = contracts.get(key)
-                iv = contract.get("volatility") if contract else None
-                if not iv or iv <= 0:
-                    continue
-                prob = touch_probability(spot, barrier["price"], iv / 100, years)
-            else:  # option_price
-                contract = contracts.get(key)
-                if not contract:
-                    continue
-                prob = option_price_barrier_probability(spot, leg["strike"], leg["type"], contract, barrier["price"])
-
-            if prob is not None:
-                weighted.setdefault(key, []).append((prob, qty))
+            p = _leg_stop_probability(spot, contracts, pos, leg, barrier)
+            if p is not None:
+                key = (leg["strike"], leg["type"])
+                weighted.setdefault(key, []).append((p, -leg["qty"]))
 
     out = {}
     for key, entries in weighted.items():
@@ -372,6 +427,110 @@ def stop_probabilities_by_strike(positions: list[dict]) -> dict:
         if total_w:
             out[key] = sum(p * w for p, w in entries) / total_w
     return out
+
+
+def position_expected_values(positions: list[dict]) -> dict:
+    """{serial: {'stop_probability': float, 'ev': float}} -- for each open
+    position, its own probability of being stopped (see
+    stop_probabilities_by_strike for how combined-stop "Elmo" positions are
+    handled) and the expected value of continuing to hold it:
+
+        EV = (1 - p_stop) * remaining_to_capture - p_stop * at_risk
+
+    remaining_to_capture and at_risk are the same max_profit-minus-captured
+    and max_loss figures aggregate_short_strikes already computes per
+    position (here read directly off the position dict rather than
+    re-aggregated by strike) -- EV is a probability-weighted view of "is
+    holding this position, from here, a good bet," not a P&L projection.
+
+    A position with no resolvable stop (stop_target "None", or an
+    unparseable one) or missing chain data for its legs is omitted --
+    treat an absent serial as "unknown," not "EV 0."
+    """
+    import tradesteward_fetch as tsf
+
+    stop_probs = stop_probabilities_by_strike(positions)
+
+    out = {}
+    for pos in positions:
+        sides = tsf.short_strikes_by_side(pos)
+        combined = _is_combined_stop_position(pos) and sides["C"] and sides["P"]
+
+        leg_probs = []
+        for side_legs in sides.values():
+            for leg in side_legs:
+                p = stop_probs.get((leg["strike"], leg["type"]))
+                if p is not None:
+                    leg_probs.append(p)
+        if not leg_probs:
+            continue
+        # Combined positions already store the same fused probability on
+        # every leg; independent positions' legs already carry their own.
+        p_stop = leg_probs[0] if combined else max(leg_probs)
+
+        max_profit = abs(tsf.parse_money(pos.get("max_profit", "0") or "0"))
+        captured = max(tsf.parse_money(pos.get("profit_dollars", "0") or "0"), 0.0)
+        remaining = max_profit - captured
+        at_risk = abs(tsf.parse_money(pos.get("max_loss", "0") or "0"))
+
+        ev = (1 - p_stop) * remaining - p_stop * at_risk
+        out[pos.get("serial")] = {"stop_probability": p_stop, "ev": ev}
+    return out
+
+
+def net_greeks(positions: list[dict]) -> dict:
+    """Book-wide net delta and gamma (in underlying-equivalent shares, i.e.
+    already multiplied by qty and the 100x SPX multiplier), summed across
+    every leg of every open position -- unlike the stop-probability work,
+    this includes long legs too, since a spread's net exposure depends on
+    both sides.
+
+    Also returns delta shocked +-10 points: a first-order (gamma) local
+    approximation of how net delta would look after a 10pt move --
+    delta_at(dS) = net_delta + net_gamma * dS -- using the book's current
+    net gamma as a constant slope. This ignores gamma's own curvature
+    (gamma isn't actually constant over a 10pt move) but is the standard
+    quick estimate and matches what the two "delta at +-10pt" figures on a
+    typical 0DTE risk panel represent.
+
+    Returns {} if the chain isn't available; a leg whose specific contract
+    is missing from the chain is skipped (not treated as zero exposure --
+    the net figures are a best-effort sum over whatever legs we could
+    price).
+    """
+    import tradesteward_fetch as tsf
+
+    chain = option_chain_lookup()
+    contracts = chain.get("contracts", {})
+    if not chain.get("spot"):
+        return {}
+
+    net_delta = 0.0
+    net_gamma = 0.0
+    for pos in positions:
+        for leg_str in pos.get("legs", []):
+            leg = tsf.parse_leg(leg_str)
+            if not leg:
+                continue
+            contract = contracts.get((leg["strike"], leg["type"]))
+            if not contract:
+                continue
+            delta = contract.get("delta")
+            gamma = contract.get("gamma")
+            if delta is None or gamma is None:
+                continue
+            # leg["qty"] is already signed (short negative); Schwab's own
+            # delta sign convention (put deltas negative) means qty * delta
+            # gives the correct signed exposure without extra sign-flipping.
+            net_delta += leg["qty"] * delta * 100
+            net_gamma += leg["qty"] * gamma * 100
+
+    return {
+        "net_delta": net_delta,
+        "net_gamma": net_gamma,
+        "delta_at_minus_10": net_delta + net_gamma * -10,
+        "delta_at_plus_10": net_delta + net_gamma * 10,
+    }
 
 
 def main():

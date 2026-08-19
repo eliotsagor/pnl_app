@@ -65,4 +65,13 @@ export interface Position {
   profit_pct_style: "profit" | "loss" | "";
   profit_dollars: string;
   profit_dollars_style: "profit" | "loss" | "";
+  stop_probability?: number; // 0-1, probability this position's stop triggers before close
+  ev?: number; // expected value of continuing to hold, $
+}
+
+export interface NetGreeks {
+  net_delta?: number;
+  net_gamma?: number;
+  delta_at_minus_10?: number;
+  delta_at_plus_10?: number;
 }
