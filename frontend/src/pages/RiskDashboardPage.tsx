@@ -29,6 +29,13 @@ function bandTint(strike: number, spot: number): string {
   return `${COLOR_GOOD}1f`;
 }
 
+function stopProbColor(p: number | undefined): string {
+  if (p == null) return "text.secondary";
+  if (p >= 0.5) return COLOR_CRITICAL;
+  if (p >= 0.2) return COLOR_WARNING;
+  return COLOR_GOOD;
+}
+
 interface RiskResult {
   strikes: StrikeRow[];
   quote: SpxQuote;
@@ -42,7 +49,7 @@ function EmMarker({ label, color = COLOR_WARNING }: { label: string; color?: str
   return (
     <TableRow>
       <TableCell
-        colSpan={6}
+        colSpan={7}
         align="center"
         sx={{
           color,
@@ -138,6 +145,9 @@ export default function RiskDashboardPage() {
       <TableCell align="right" sx={{ fontVariantNumeric: "tabular-nums", color: "text.secondary" }}>
         {hasQuote ? fmtDistance(r.strike, quote!.price!) : "—"}
       </TableCell>
+      <TableCell align="right" sx={{ fontVariantNumeric: "tabular-nums", color: stopProbColor(r.stop_probability) }}>
+        {r.stop_probability != null ? `${Math.round(r.stop_probability * 100)}%` : "—"}
+      </TableCell>
       <TableCell align="right" sx={{ fontVariantNumeric: "tabular-nums" }}>
         {r.qty}
       </TableCell>
@@ -229,6 +239,9 @@ export default function RiskDashboardPage() {
                   Distance
                 </TableCell>
                 <TableCell align="right" sx={{ fontWeight: 600 }}>
+                  Stop%
+                </TableCell>
+                <TableCell align="right" sx={{ fontWeight: 600 }}>
                   Qty
                 </TableCell>
                 <TableCell align="right" sx={{ fontWeight: 600 }}>
@@ -254,7 +267,7 @@ export default function RiskDashboardPage() {
               {hasQuote && (
                 <TableRow>
                   <TableCell
-                    colSpan={6}
+                    colSpan={7}
                     align="center"
                     sx={{
                       color: "text.secondary",

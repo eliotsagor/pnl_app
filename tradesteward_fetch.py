@@ -56,6 +56,11 @@ MONTH_ABBR = {
 }
 _OPEN_TIME_RE = re.compile(r"^\w+ (\w+) (\d+) ")
 _LEG_RE = re.compile(r"^(-?\d+)\s+\S+\s+.*?(\d+(?:\.\d+)?)([CP])$")
+_DOLLAR_STOP_RE = re.compile(r"^\$([\d.,]+)\s+Loss$", re.I)
+_PCT_STOP_RE = re.compile(r"^([\d.]+)%\s+Loss$", re.I)
+_POINTS_STOP_RE = re.compile(r"^([\d.]+)\s+Points?\s+ITM$", re.I)
+_STOP_AT_RE = re.compile(r"Stop at \$([\d.,]+)", re.I)
+_OPEN_CREDIT_RE = re.compile(r"Open:.*?\$([\d.,]+)\s+Credit", re.I | re.S)
 
 ENDPOINT = "https://www.tradesteward.com/ajax"
 DASHBOARD_URL = "https://www.tradesteward.com/trading/"  # logged-in dashboard (redirects to login if signed out)
@@ -150,6 +155,7 @@ def extract_positions(payload: dict) -> list[dict]:
                 "profit_dollars_style": dollars.get("style", ""),
                 "max_profit": dollars.get("maxProfit", ""),
                 "max_loss": dollars.get("maxLoss", ""),
+                "stop_closest_strike": stop.get("closestStrike", ""),
             }
         )
     return positions
@@ -162,6 +168,64 @@ def parse_leg(leg: str) -> dict | None:
     if not m:
         return None
     return {"qty": int(m.group(1)), "strike": float(m.group(2)), "type": m.group(3)}
+
+
+def resolve_stop_barrier(position: dict, leg: dict) -> dict | None:
+    """Turn a position's stop_target into a concrete barrier for one of its
+    short legs, in whichever unit that stop type is naturally defined:
+
+    - "$X Loss"    -> {'kind': 'option_price', 'price': entry + X}. Uses
+      TradeSteward's own computed trigger price from stop_closest_strike
+      ("...; Stop at $Y") directly when available (authoritative, no
+      re-derivation), falling back to entry_credit + X if that field is
+      ever missing.
+    - "X% Loss"    -> {'kind': 'option_price', 'price': entry * (1 + X/100)}.
+      Derived (TradeSteward doesn't expose a fixed $ target for this type,
+      only a live "% Loss so far" reading) -- there's nothing for us to
+      cross-check this against except that live reading, which is a
+      snapshot of current distance, not a stored target.
+    - "N Points ITM" -> {'kind': 'spot_price', 'price': strike -+ N}. This
+      stop type's trigger already *is* a fixed SPX level (how far the
+      strike is breached), so no option pricing is involved at all.
+    - "None" / unrecognized -> None (no stop set, or a format we don't
+      parse yet).
+
+    entry credit comes from open_price ("Open: $X Credit..."); a position
+    missing that (shouldn't happen for a short leg) also returns None.
+    """
+    target = (position.get("stop_target") or "").strip()
+    if not target or target.lower() == "none":
+        return None
+
+    m = _DOLLAR_STOP_RE.match(target)
+    if m:
+        amount = float(m.group(1).replace(",", ""))
+        closest = position.get("stop_closest_strike", "") or ""
+        stop_at = _STOP_AT_RE.search(closest)
+        if stop_at:
+            return {"kind": "option_price", "price": float(stop_at.group(1).replace(",", ""))}
+        entry = _OPEN_CREDIT_RE.search(position.get("open_price", "") or "")
+        if not entry:
+            return None
+        return {"kind": "option_price", "price": float(entry.group(1).replace(",", "")) + amount}
+
+    m = _PCT_STOP_RE.match(target)
+    if m:
+        pct = float(m.group(1))
+        entry = _OPEN_CREDIT_RE.search(position.get("open_price", "") or "")
+        if not entry:
+            return None
+        entry_credit = float(entry.group(1).replace(",", ""))
+        return {"kind": "option_price", "price": entry_credit * (1 + pct / 100)}
+
+    m = _POINTS_STOP_RE.match(target)
+    if m:
+        points = float(m.group(1))
+        # A short call is breached (ITM) above its strike; a short put below.
+        sign = 1 if leg["type"] == "C" else -1
+        return {"kind": "spot_price", "price": leg["strike"] + sign * points}
+
+    return None
 
 
 def short_strikes_by_side(position: dict) -> dict[str, list[dict]]:
