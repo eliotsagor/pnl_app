@@ -1,4 +1,3 @@
-import { useEffect, useRef, useState } from "react";
 import {
   Alert,
   Box,
@@ -15,9 +14,13 @@ import {
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import { tradestewardApi } from "../api/tradesteward";
-import { useJobPolling } from "../hooks/useJobPolling";
+import { useAutoRefreshJob } from "../hooks/useAutoRefreshJob";
 import type { Position } from "../api/types";
 import { COLOR_GOOD, COLOR_CRITICAL } from "../theme";
+
+interface PositionsResult {
+  positions: Position[];
+}
 
 function styleColor(style: string) {
   if (style === "profit") return COLOR_GOOD;
@@ -38,48 +41,29 @@ function openPriceLines(html: string): string[] {
 }
 
 export default function PositionsPage() {
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [starting, setStarting] = useState(false);
-  const [startError, setStartError] = useState<string | null>(null);
-  const [positions, setPositions] = useState<Position[] | null>(null);
-  const { job, pollError } = useJobPolling(jobId);
-  const notifiedDone = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (job?.status === "done" && jobId && notifiedDone.current !== jobId) {
-      notifiedDone.current = jobId;
-      const result = job.result as { positions: Position[] } | null;
-      setPositions(result?.positions ?? []);
-    }
-  }, [job?.status, jobId, job?.result]);
-
-  const start = async () => {
-    setStarting(true);
-    setStartError(null);
-    try {
-      const { job_id } = await tradestewardApi.fetchPositions();
-      setJobId(job_id);
-    } catch (e) {
-      setStartError((e as Error).message);
-    } finally {
-      setStarting(false);
-    }
-  };
-
-  const isActive = job && !["done", "error", "cancelled"].includes(job.status);
+  const { job, data, startError, pollError, isActive, lastUpdated, refreshNow } =
+    useAutoRefreshJob<PositionsResult>(tradestewardApi.fetchPositions);
+  const positions = data?.positions ?? null;
 
   return (
     <Box sx={{ maxWidth: 1600, mx: "auto", px: 3, pb: 4 }}>
       <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
         <Typography variant="h6">Current Bot Positions</Typography>
+        {lastUpdated && (
+          <Typography variant="caption" color="text.secondary">
+            updated {lastUpdated.toLocaleTimeString()}
+            {isActive ? " · refreshing…" : ""}
+          </Typography>
+        )}
         <Button
           variant="contained"
           size="small"
           startIcon={<RefreshIcon />}
-          onClick={start}
-          disabled={starting || !!isActive}
+          onClick={refreshNow}
+          disabled={isActive}
+          sx={{ ml: "auto" }}
         >
-          {starting ? "Starting…" : positions ? "Refresh" : "Load positions"}
+          {isActive ? (data ? "Refreshing…" : "Starting…") : positions ? "Refresh now" : "Load positions"}
         </Button>
       </Box>
 
