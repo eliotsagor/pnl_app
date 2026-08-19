@@ -433,21 +433,35 @@ def position_expected_values(positions: list[dict]) -> dict:
     """{serial: {'stop_probability': float, 'ev': float}} -- for each open
     position, its own probability of being stopped (see
     stop_probabilities_by_strike for how combined-stop "Elmo" positions are
-    handled) and the expected value of continuing to hold it:
+    handled) and the expected value of continuing to hold it, built from
+    each short leg's own current price and stop price rather than the
+    position's original entry-to-max-loss figures:
 
-        EV = (1 - p_stop) * remaining_to_capture - p_stop * at_risk
+        loss_from_here = (stop_price - current_price) * qty * 100
+        gain_from_here = current_price * qty * 100  (decay to worthless)
+        EV = (1 - p_stop) * gain_from_here - p_stop * loss_from_here
 
-    remaining_to_capture and at_risk are the same max_profit-minus-captured
-    and max_loss figures aggregate_short_strikes already computes per
-    position (here read directly off the position dict rather than
-    re-aggregated by strike) -- EV is a probability-weighted view of "is
-    holding this position, from here, a good bet," not a P&L projection.
+    This matters because a position already sitting near max profit has
+    very little room left to lose even with a nearby (high-probability)
+    stop -- using the position's original max_loss (the entry-to-stop
+    distance, not here-to-stop) would overstate the downside and make an
+    already-winning trade look like a bad one to keep holding. A position
+    at 95% of max profit with a 95% stop probability should show an EV
+    close to its remaining premium, not a coin-flip against the full
+    original risk, since "stopped" from here mostly means giving back a
+    little, and "not stopped" mostly means banking what's left.
 
-    A position with no resolvable stop (stop_target "None", or an
-    unparseable one) or missing chain data for its legs is omitted --
-    treat an absent serial as "unknown," not "EV 0."
+    Summed across a position's short legs (an Elmo's two sides both count,
+    weighted by their own qty). A position with no resolvable stop or
+    missing chain data for its legs is omitted -- treat an absent serial as
+    "unknown," not "EV 0."
     """
     import tradesteward_fetch as tsf
+
+    chain = option_chain_lookup()
+    contracts = chain.get("contracts", {})
+    if not chain.get("spot"):
+        return {}
 
     stop_probs = stop_probabilities_by_strike(positions)
 
@@ -456,24 +470,62 @@ def position_expected_values(positions: list[dict]) -> dict:
         sides = tsf.short_strikes_by_side(pos)
         combined = _is_combined_stop_position(pos) and sides["C"] and sides["P"]
 
-        leg_probs = []
-        for side_legs in sides.values():
-            for leg in side_legs:
-                p = stop_probs.get((leg["strike"], leg["type"]))
-                if p is not None:
-                    leg_probs.append(p)
+        all_legs = [leg for side_legs in sides.values() for leg in side_legs]
+        leg_probs = [stop_probs.get((leg["strike"], leg["type"])) for leg in all_legs]
+        leg_probs = [p for p in leg_probs if p is not None]
         if not leg_probs:
             continue
-        # Combined positions already store the same fused probability on
-        # every leg; independent positions' legs already carry their own.
         p_stop = leg_probs[0] if combined else max(leg_probs)
 
+        spot = chain["spot"]
+        total_gain = 0.0
+        total_loss = 0.0
+        priced_any = False
+        for leg in all_legs:
+            barrier = tsf.resolve_stop_barrier(pos, leg)
+            contract = contracts.get((leg["strike"], leg["type"]))
+            current = contract.get("mark") if contract else None
+            if current is None or barrier is None:
+                continue
+
+            if barrier["kind"] == "option_price":
+                stop_price = barrier["price"]
+            else:  # spot_price ("N Points ITM") -- convert via this leg's
+                # own current delta (a local-linear step). Tried repricing
+                # via Black-Scholes instead, but it diverges badly from
+                # Schwab's own live 0DTE prices this close to expiry (real
+                # 0DTE options don't price like vanilla BS at this range)
+                # -- the delta-anchored estimate, while it has its own known
+                # weakness (delta instability in the very final minutes),
+                # is at least anchored to a real quoted greek rather than a
+                # theoretical model that's demonstrably wrong here.
+                delta = contract.get("delta")
+                if not delta:
+                    continue
+                direction = 1 if leg["type"] == "C" else -1
+                spot_points_to_stop = (barrier["price"] - spot) * direction
+                stop_price = current + abs(delta) * spot_points_to_stop
+
+            qty = -leg["qty"]  # positive short contract count
+            total_gain += current * qty * 100
+            total_loss += max(stop_price - current, 0.0) * qty * 100
+            priced_any = True
+        if not priced_any:
+            continue
+
+        # A defined-risk spread's long leg caps the real max loss (and its
+        # short leg's own premium caps the real max gain) below what a
+        # naive per-leg calc can imply -- clamp both against TradeSteward's
+        # own stated ceilings for this position, which already account for
+        # the full spread structure.
         max_profit = abs(tsf.parse_money(pos.get("max_profit", "0") or "0"))
         captured = max(tsf.parse_money(pos.get("profit_dollars", "0") or "0"), 0.0)
-        remaining = max_profit - captured
-        at_risk = abs(tsf.parse_money(pos.get("max_loss", "0") or "0"))
+        remaining_ceiling = max(max_profit - captured, 0.0)
+        at_risk_ceiling = abs(tsf.parse_money(pos.get("max_loss", "0") or "0"))
+        total_gain = min(total_gain, remaining_ceiling) if remaining_ceiling else total_gain
+        total_loss = min(total_loss, at_risk_ceiling) if at_risk_ceiling else total_loss
 
-        ev = (1 - p_stop) * remaining - p_stop * at_risk
+        ev = (1 - p_stop) * total_gain - p_stop * total_loss
         out[pos.get("serial")] = {"stop_probability": p_stop, "ev": ev}
     return out
 
