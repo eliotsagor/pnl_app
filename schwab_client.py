@@ -430,8 +430,9 @@ def stop_probabilities_by_strike(positions: list[dict]) -> dict:
 
 
 def position_expected_values(positions: list[dict]) -> dict:
-    """{serial: {'stop_probability': float, 'ev': float}} -- for each open
-    position, its own probability of being stopped (see
+    """{serial: {'stop_probability': float, 'ev': float, 'delta': float,
+    'gamma': float}} -- for each open position, its own probability of
+    being stopped (see
     stop_probabilities_by_strike for how combined-stop "Elmo" positions are
     handled) and the expected value of continuing to hold it, built from
     each short leg's own current price and stop price rather than the
@@ -476,6 +477,23 @@ def position_expected_values(positions: list[dict]) -> dict:
         if not leg_probs:
             continue
         p_stop = leg_probs[0] if combined else max(leg_probs)
+
+        # This position's own net delta/gamma -- unlike net_greeks (book-wide),
+        # this is scoped to just this position's legs (both short and long,
+        # since a spread's own risk depends on its full structure), so you can
+        # see which specific trade is driving exposure independent of whatever
+        # else in the book might be offsetting it.
+        pos_delta = 0.0
+        pos_gamma = 0.0
+        for leg_str in pos.get("legs", []):
+            leg_full = tsf.parse_leg(leg_str)
+            if not leg_full:
+                continue
+            c = contracts.get((leg_full["strike"], leg_full["type"]))
+            if not c or c.get("delta") is None or c.get("gamma") is None:
+                continue
+            pos_delta += leg_full["qty"] * c["delta"] * 100
+            pos_gamma += leg_full["qty"] * c["gamma"] * 100
 
         spot = chain["spot"]
         total_gain = 0.0
@@ -526,7 +544,12 @@ def position_expected_values(positions: list[dict]) -> dict:
         total_loss = min(total_loss, at_risk_ceiling) if at_risk_ceiling else total_loss
 
         ev = (1 - p_stop) * total_gain - p_stop * total_loss
-        out[pos.get("serial")] = {"stop_probability": p_stop, "ev": ev}
+        out[pos.get("serial")] = {
+            "stop_probability": p_stop,
+            "ev": ev,
+            "delta": pos_delta,
+            "gamma": pos_gamma,
+        }
     return out
 
 

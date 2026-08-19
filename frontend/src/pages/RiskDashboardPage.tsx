@@ -434,6 +434,12 @@ export default function RiskDashboardPage() {
                     Stop%
                   </TableCell>
                   <TableCell align="right" sx={{ fontWeight: 600 }}>
+                    Delta
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 600 }}>
+                    Gamma
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 600 }}>
                     EV
                   </TableCell>
                 </TableRow>
@@ -454,6 +460,15 @@ export default function RiskDashboardPage() {
                       </TableCell>
                       <TableCell align="right" sx={{ color: stopProbColor(p.stop_probability), fontVariantNumeric: "tabular-nums" }}>
                         {p.stop_probability != null ? `${Math.round(p.stop_probability * 100)}%` : "—"}
+                      </TableCell>
+                      <TableCell align="right" sx={{ fontVariantNumeric: "tabular-nums", color: "text.secondary" }}>
+                        {p.delta != null ? fmtSigned(p.delta) : "—"}
+                      </TableCell>
+                      <TableCell
+                        align="right"
+                        sx={{ fontVariantNumeric: "tabular-nums", color: (p.gamma ?? 0) < 0 ? COLOR_CRITICAL : "text.secondary" }}
+                      >
+                        {p.gamma != null ? fmtSigned(p.gamma, 1) : "—"}
                       </TableCell>
                       <TableCell align="right" sx={{ color: evColor(p.ev!), fontVariantNumeric: "tabular-nums" }}>
                         {p.ev! >= 0 ? "+" : "-"}${Math.round(Math.abs(p.ev!)).toLocaleString()}

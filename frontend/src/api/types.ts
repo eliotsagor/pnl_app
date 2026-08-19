@@ -69,6 +69,8 @@ export interface Position {
   profit_dollars_style: "profit" | "loss" | "";
   stop_probability?: number; // 0-1, probability this position's stop triggers before close
   ev?: number; // expected value of continuing to hold, $
+  delta?: number; // this position's own net delta (short + long legs), underlying-equivalent shares
+  gamma?: number; // this position's own net gamma
 }
 
 export interface NetGreeks {
