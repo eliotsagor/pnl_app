@@ -277,6 +277,10 @@ def aggregate_short_strikes(positions: list[dict]) -> list[dict]:
         captured = max(parse_money(pos.get("profit_dollars", "0") or "0"), 0.0)
         remaining = max_profit - captured
 
+        bot_name_upper = (pos.get("bot_name") or "").upper()
+        is_bic = "BIC" in bot_name_upper
+        is_elmo = "PAIC" in bot_name_upper
+
         for side, legs in sides.items():
             if not legs:
                 continue
@@ -293,6 +297,8 @@ def aggregate_short_strikes(positions: list[dict]) -> list[dict]:
                         "remaining": 0.0,
                         "at_risk": 0.0,
                         "positions": 0,
+                        "is_bic": False,
+                        "is_elmo": False,
                     },
                 )
                 leg_qty = -leg["qty"]
@@ -303,6 +309,8 @@ def aggregate_short_strikes(positions: list[dict]) -> list[dict]:
                     row["remaining"] += remaining * frac
                     row["at_risk"] += at_risk * frac
                 row["positions"] += 1
+                row["is_bic"] = row["is_bic"] or is_bic
+                row["is_elmo"] = row["is_elmo"] or is_elmo
 
     return sorted(rows.values(), key=lambda r: (r["type"] == "C", r["strike"]))
 
