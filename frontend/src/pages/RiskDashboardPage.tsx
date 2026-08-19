@@ -2,6 +2,7 @@ import { Alert, Box, Button, Chip, CircularProgress, Table, TableBody, TableCell
 import RefreshIcon from "@mui/icons-material/Refresh";
 import { tradestewardApi } from "../api/tradesteward";
 import { useAutoRefreshJob } from "../hooks/useAutoRefreshJob";
+import { useResizableSplit } from "../hooks/useResizableSplit";
 import type { StrikeRow, SpxQuote, ExpectedMove, NetGreeks, Position } from "../api/types";
 import { COLOR_GOOD, COLOR_CRITICAL, COLOR_WARNING } from "../theme";
 
@@ -78,6 +79,7 @@ function EmMarker({ label, color = COLOR_WARNING }: { label: string; color?: str
 export default function RiskDashboardPage() {
   const { job, data, startError, pollError, isActive, lastUpdated, refreshNow } =
     useAutoRefreshJob<RiskResult>(tradestewardApi.fetchRisk);
+  const { width: leftWidth, onDividerMouseDown } = useResizableSplit("risk-split-width", 680, 420, 1200);
 
   // Closest-to-spot strikes sit nearest the spot divider on both sides:
   // calls descend toward it from above, puts descend away from it below.
@@ -271,8 +273,8 @@ export default function RiskDashboardPage() {
       )}
 
       {data && (calls.length > 0 || puts.length > 0) && (
-      <Box sx={{ display: "flex", gap: 3, alignItems: "flex-start" }}>
-        <Box sx={{ flex: "0 0 680px", minWidth: 0 }}>
+      <Box sx={{ display: "flex", alignItems: "flex-start" }}>
+        <Box sx={{ flex: `0 0 ${leftWidth}px`, minWidth: 0 }}>
         <TableContainer sx={{ border: "1px solid rgba(255,255,255,0.10)", borderRadius: "12px" }}>
           <Table size="small">
             <TableHead>
@@ -395,6 +397,21 @@ export default function RiskDashboardPage() {
             </Box>
           </Box>
         </Box>
+        </Box>
+
+        <Box
+          onMouseDown={onDividerMouseDown}
+          sx={{
+            flex: "0 0 auto",
+            width: "10px",
+            alignSelf: "stretch",
+            cursor: "col-resize",
+            display: "flex",
+            justifyContent: "center",
+            "&:hover > div, &:active > div": { bgcolor: "primary.main" },
+          }}
+        >
+          <Box sx={{ width: "2px", bgcolor: "rgba(255,255,255,0.15)", borderRadius: "1px" }} />
         </Box>
 
         {data.positions && data.positions.some((p) => p.ev != null) && (
