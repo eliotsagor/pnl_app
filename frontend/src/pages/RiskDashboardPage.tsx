@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState } from "react";
 import { Alert, Box, Button, CircularProgress, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import { tradestewardApi } from "../api/tradesteward";
-import { useJobPolling } from "../hooks/useJobPolling";
+import { useAutoRefreshJob } from "../hooks/useAutoRefreshJob";
 import type { StrikeRow, SpxQuote, ExpectedMove, NetGreeks, Position } from "../api/types";
 import { COLOR_GOOD, COLOR_CRITICAL, COLOR_WARNING } from "../theme";
 
@@ -77,34 +76,8 @@ function EmMarker({ label, color = COLOR_WARNING }: { label: string; color?: str
 }
 
 export default function RiskDashboardPage() {
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [starting, setStarting] = useState(false);
-  const [startError, setStartError] = useState<string | null>(null);
-  const [data, setData] = useState<RiskResult | null>(null);
-  const { job, pollError } = useJobPolling(jobId);
-  const notifiedDone = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (job?.status === "done" && jobId && notifiedDone.current !== jobId) {
-      notifiedDone.current = jobId;
-      setData(job.result as RiskResult);
-    }
-  }, [job?.status, jobId, job?.result]);
-
-  const start = async () => {
-    setStarting(true);
-    setStartError(null);
-    try {
-      const { job_id } = await tradestewardApi.fetchRisk();
-      setJobId(job_id);
-    } catch (e) {
-      setStartError((e as Error).message);
-    } finally {
-      setStarting(false);
-    }
-  };
-
-  const isActive = job && !["done", "error", "cancelled"].includes(job.status);
+  const { job, data, startError, pollError, isActive, lastUpdated, refreshNow } =
+    useAutoRefreshJob<RiskResult>(tradestewardApi.fetchRisk);
 
   // Closest-to-spot strikes sit nearest the spot divider on both sides:
   // calls descend toward it from above, puts descend away from it below.
@@ -191,15 +164,21 @@ export default function RiskDashboardPage() {
             EM ±{em!.expected_move!.toFixed(1)} ({fmtPrice(emDown!)} – {fmtPrice(emUp!)})
           </Typography>
         )}
+        {lastUpdated && (
+          <Typography variant="caption" color="text.secondary">
+            updated {lastUpdated.toLocaleTimeString()}
+            {isActive ? " · refreshing…" : ""}
+          </Typography>
+        )}
         <Button
           variant="contained"
           size="small"
           startIcon={<RefreshIcon />}
-          onClick={start}
-          disabled={starting || !!isActive}
+          onClick={refreshNow}
+          disabled={isActive}
           sx={{ ml: "auto" }}
         >
-          {starting ? "Starting…" : data ? "Refresh" : "Load positions"}
+          {isActive ? (data ? "Refreshing…" : "Starting…") : data ? "Refresh now" : "Load positions"}
         </Button>
       </Box>
 
