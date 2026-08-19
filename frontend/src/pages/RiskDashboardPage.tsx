@@ -162,7 +162,7 @@ export default function RiskDashboardPage() {
   );
 
   return (
-    <Box sx={{ maxWidth: 1800, mx: "auto", px: 3, pb: 4 }}>
+    <Box sx={{ maxWidth: 1800, mx: "auto", px: 1.5, pb: 4 }}>
       <Box sx={{ display: "flex", alignItems: "baseline", gap: 2, mb: 2 }}>
         <Typography variant="h5" sx={{ fontWeight: 700 }}>
           {hasQuote ? `SPX ${fmtPrice(quote!.price!)}` : "SPX —"}
@@ -272,7 +272,7 @@ export default function RiskDashboardPage() {
 
       {data && (calls.length > 0 || puts.length > 0) && (
       <Box sx={{ display: "flex", gap: 3, alignItems: "flex-start" }}>
-        <Box sx={{ flex: "0 0 480px", minWidth: 0 }}>
+        <Box sx={{ flex: "1 1 auto", minWidth: 620 }}>
         <TableContainer sx={{ border: "1px solid rgba(255,255,255,0.10)", borderRadius: "12px" }}>
           <Table size="small">
             <TableHead>
@@ -398,7 +398,7 @@ export default function RiskDashboardPage() {
         </Box>
 
         {data.positions && data.positions.some((p) => p.ev != null) && (
-        <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Box sx={{ flex: "0 0 420px", minWidth: 0 }}>
           <Typography variant="subtitle2" sx={{ mb: 1 }}>
             Expected value of holding
           </Typography>
