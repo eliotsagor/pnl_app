@@ -112,6 +112,8 @@ def _run_fetch_risk(job_id: str):
                 if ev is not None:
                     pos["stop_probability"] = ev["stop_probability"]
                     pos["ev"] = ev["ev"]
+                    pos["delta"] = ev["delta"]
+                    pos["gamma"] = ev["gamma"]
         except Exception:
             pass  # EV is best-effort; positions still render without it
         jobs.update_job(
