@@ -3,7 +3,7 @@ import { Alert, Box, Button, CircularProgress, Table, TableBody, TableCell, Tabl
 import RefreshIcon from "@mui/icons-material/Refresh";
 import { tradestewardApi } from "../api/tradesteward";
 import { useJobPolling } from "../hooks/useJobPolling";
-import type { StrikeRow, SpxQuote, ExpectedMove } from "../api/types";
+import type { StrikeRow, SpxQuote, ExpectedMove, NetGreeks, Position } from "../api/types";
 import { COLOR_GOOD, COLOR_CRITICAL, COLOR_WARNING } from "../theme";
 
 function fmtMoney(v: number) {
@@ -40,6 +40,17 @@ interface RiskResult {
   strikes: StrikeRow[];
   quote: SpxQuote;
   expected_move: ExpectedMove;
+  greeks: NetGreeks;
+  positions: Position[];
+}
+
+function fmtSigned(v: number, digits = 0) {
+  const sign = v >= 0 ? "+" : "";
+  return `${sign}${v.toFixed(digits)}`;
+}
+
+function evColor(v: number): string {
+  return v >= 0 ? COLOR_GOOD : COLOR_CRITICAL;
 }
 
 // A dashed marker row inserted at the point in a sorted-by-strike list where
@@ -191,6 +202,43 @@ export default function RiskDashboardPage() {
           {starting ? "Starting…" : data ? "Refresh" : "Load positions"}
         </Button>
       </Box>
+
+      {data?.greeks && data.greeks.net_delta != null && (
+        <Box sx={{ display: "flex", gap: 4, mb: 2, flexWrap: "wrap" }}>
+          <Box>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+              Net delta
+            </Typography>
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+              {fmtSigned(data.greeks.net_delta)}
+            </Typography>
+          </Box>
+          <Box>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+              Net gamma
+            </Typography>
+            <Typography variant="h6" sx={{ fontWeight: 600, color: (data.greeks.net_gamma ?? 0) < 0 ? COLOR_CRITICAL : "text.primary" }}>
+              {fmtSigned(data.greeks.net_gamma ?? 0, 1)}
+            </Typography>
+          </Box>
+          <Box>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+              δ @ -10pt
+            </Typography>
+            <Typography variant="h6" sx={{ fontWeight: 600, color: COLOR_WARNING }}>
+              {fmtSigned(data.greeks.delta_at_minus_10 ?? 0)}
+            </Typography>
+          </Box>
+          <Box>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+              δ @ +10pt
+            </Typography>
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+              {fmtSigned(data.greeks.delta_at_plus_10 ?? 0)}
+            </Typography>
+          </Box>
+        </Box>
+      )}
 
       {startError && (
         <Alert severity="error" sx={{ mb: 2 }}>
@@ -353,6 +401,53 @@ export default function RiskDashboardPage() {
               </Typography>
             </Box>
           </Box>
+        </Box>
+      )}
+
+      {data && data.positions && data.positions.some((p) => p.ev != null) && (
+        <Box sx={{ mt: 3 }}>
+          <Typography variant="subtitle2" sx={{ mb: 1 }}>
+            Expected value of holding
+          </Typography>
+          <TableContainer sx={{ border: "1px solid rgba(255,255,255,0.10)", borderRadius: "12px" }}>
+            <Table size="small">
+              <TableHead>
+                <TableRow sx={{ bgcolor: "background.paper" }}>
+                  <TableCell sx={{ fontWeight: 600 }}>Bot</TableCell>
+                  <TableCell sx={{ fontWeight: 600 }}>Strategy</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 600 }}>
+                    Stop%
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 600 }}>
+                    EV
+                  </TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {data.positions
+                  .filter((p) => p.ev != null)
+                  .sort((a, b) => (a.ev ?? 0) - (b.ev ?? 0))
+                  .map((p) => (
+                    <TableRow key={p.serial} hover>
+                      <TableCell>
+                        <Typography variant="body2">{p.bot_name}</Typography>
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2" color="text.secondary">
+                          {p.strategy}
+                        </Typography>
+                      </TableCell>
+                      <TableCell align="right" sx={{ color: stopProbColor(p.stop_probability), fontVariantNumeric: "tabular-nums" }}>
+                        {p.stop_probability != null ? `${Math.round(p.stop_probability * 100)}%` : "—"}
+                      </TableCell>
+                      <TableCell align="right" sx={{ color: evColor(p.ev!), fontVariantNumeric: "tabular-nums" }}>
+                        {p.ev! >= 0 ? "+" : "-"}${Math.round(Math.abs(p.ev!)).toLocaleString()}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
         </Box>
       )}
     </Box>
