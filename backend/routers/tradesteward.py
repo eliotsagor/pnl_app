@@ -99,6 +99,11 @@ def _run_fetch_risk(job_id: str):
                 prob = stop_probs.get((row["strike"], row["type"]))
                 if prob is not None:
                     row["stop_probability"] = prob
+                    # Portion of this strike's stated max loss that's
+                    # actually likely to happen today -- weighting by stop
+                    # probability turns a static worst-case figure into "how
+                    # much of this risk is realistically in play right now."
+                    row["at_risk_in_em"] = row["at_risk"] * prob
         except Exception:
             pass  # stop-probability is best-effort; strikes still render without it
         try:

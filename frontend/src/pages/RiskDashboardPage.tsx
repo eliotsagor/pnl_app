@@ -65,7 +65,7 @@ function EmMarker({ label, color = COLOR_WARNING }: { label: string; color?: str
   return (
     <TableRow>
       <TableCell
-        colSpan={7}
+        colSpan={8}
         align="center"
         sx={{
           color,
@@ -91,7 +91,8 @@ export default function RiskDashboardPage() {
   const calls = (data?.strikes ?? []).filter((r) => r.type === "C").sort((a, b) => b.strike - a.strike);
   const puts = (data?.strikes ?? []).filter((r) => r.type === "P").sort((a, b) => b.strike - a.strike);
 
-  const sum = (rows: StrikeRow[], key: "captured" | "remaining" | "at_risk") => rows.reduce((s, r) => s + r[key], 0);
+  const sum = (rows: StrikeRow[], key: "captured" | "remaining" | "at_risk" | "at_risk_in_em") =>
+    rows.reduce((s, r) => s + (r[key] ?? 0), 0);
 
   const quote = data?.quote;
   const hasQuote = quote && quote.price != null;
@@ -164,6 +165,9 @@ export default function RiskDashboardPage() {
       </TableCell>
       <TableCell align="right" sx={{ color: COLOR_CRITICAL, fontVariantNumeric: "tabular-nums" }}>
         {fmtMoney(r.at_risk)}
+      </TableCell>
+      <TableCell align="right" sx={{ color: `${COLOR_CRITICAL}cc`, fontVariantNumeric: "tabular-nums" }}>
+        {r.at_risk_in_em != null ? fmtMoney(r.at_risk_in_em) : "—"}
       </TableCell>
     </TableRow>
   );
@@ -303,6 +307,9 @@ export default function RiskDashboardPage() {
                 <TableCell align="right" sx={{ fontWeight: 600 }}>
                   At risk
                 </TableCell>
+                <TableCell align="right" sx={{ fontWeight: 600 }}>
+                  At risk in EM
+                </TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -317,7 +324,7 @@ export default function RiskDashboardPage() {
               {hasQuote && (
                 <TableRow>
                   <TableCell
-                    colSpan={7}
+                    colSpan={8}
                     align="center"
                     sx={{
                       color: "text.secondary",
@@ -371,6 +378,14 @@ export default function RiskDashboardPage() {
                 {fmtMoney(sum(calls, "at_risk"))}
               </Typography>
             </Box>
+            <Box sx={{ display: "flex", justifyContent: "space-between" }}>
+              <Typography variant="body2" color="text.secondary">
+                at risk in EM
+              </Typography>
+              <Typography variant="body2" sx={{ color: `${COLOR_CRITICAL}cc` }}>
+                {fmtMoney(sum(calls, "at_risk_in_em"))}
+              </Typography>
+            </Box>
           </Box>
           <Box sx={{ flex: 1, p: 2, borderRadius: "12px", border: `1px solid ${COLOR_CRITICAL}55`, bgcolor: `${COLOR_CRITICAL}14` }}>
             <Typography variant="subtitle2" sx={{ mb: 1 }}>
@@ -398,6 +413,14 @@ export default function RiskDashboardPage() {
               </Typography>
               <Typography variant="body2" sx={{ color: COLOR_CRITICAL }}>
                 {fmtMoney(sum(puts, "at_risk"))}
+              </Typography>
+            </Box>
+            <Box sx={{ display: "flex", justifyContent: "space-between" }}>
+              <Typography variant="body2" color="text.secondary">
+                at risk in EM
+              </Typography>
+              <Typography variant="body2" sx={{ color: `${COLOR_CRITICAL}cc` }}>
+                {fmtMoney(sum(puts, "at_risk_in_em"))}
               </Typography>
             </Box>
           </Box>
