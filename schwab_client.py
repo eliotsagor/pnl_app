@@ -173,6 +173,207 @@ def spx_expected_move_remaining() -> dict:
     }
 
 
+def _time_to_expiry_years(hours_remaining: float | None = None) -> float:
+    """Years remaining until today's 0DTE expiry (4pm ET close). If
+    hours_remaining isn't given, computes it from the current time."""
+    if hours_remaining is None:
+        import datetime
+        import zoneinfo
+
+        now = datetime.datetime.now(zoneinfo.ZoneInfo("America/New_York"))
+        close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+        hours_remaining = max((close - now).total_seconds() / 3600, 0.0)
+    # Trading-hours convention: 6.5h/day, ~252 trading days/year.
+    return hours_remaining / 6.5 / 252
+
+
+def touch_probability(spot: float, barrier: float, iv: float, years: float) -> float | None:
+    """P(spot touches `barrier` at some point before expiry), via the
+    reflection-principle approximation for a driftless geometric Brownian
+    motion: P(touch) ~= 2 * Phi(-|ln(barrier/spot)| / (iv * sqrt(years))).
+
+    Standard "probability of touching" formula used for barrier options;
+    doubling the terminal-breach probability accounts for paths that cross
+    the barrier intraday and drift back before expiry, which a terminal-only
+    calculation would miss entirely -- relevant here since these are 0DTE
+    stops that trigger on touch, not on where SPX ends up at the close.
+
+    Returns None if inputs are degenerate (zero time/vol left, e.g. after
+    the close) rather than a nonsensical answer.
+    """
+    import math
+
+    if spot <= 0 or barrier <= 0 or iv <= 0 or years <= 0:
+        return None
+    z = abs(math.log(barrier / spot)) / (iv * math.sqrt(years))
+    # Phi(-z) via the standard normal CDF, using erf (no scipy dependency).
+    phi_neg_z = 0.5 * math.erfc(z / math.sqrt(2))
+    return min(2 * phi_neg_z, 1.0)
+
+
+def _atm_iv_and_spot(client, symbol: str = "$SPX") -> tuple[float, float] | None:
+    """(spot, atm_iv) for today's 0DTE chain, atm_iv as a decimal (e.g. 0.13
+    for 13%). Used as the touch-probability vol input for barriers defined
+    directly in SPX terms (the "Points ITM" stop type, and general
+    strike-touch queries) -- the ATM contract's own reported IV, not an
+    assumption."""
+    from datetime import date
+
+    resp = client.get_option_chain(
+        symbol,
+        contract_type=client.Options.ContractType.CALL,
+        strike_count=1,
+        include_underlying_quote=True,
+        from_date=date.today(),
+        to_date=date.today(),
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    spot = (data.get("underlying") or {}).get("mark") or (data.get("underlying") or {}).get("last")
+    call_map = data.get("callExpDateMap") or {}
+    if not spot or not call_map:
+        return None
+    for strikes in call_map.values():
+        closest = min(strikes.items(), key=lambda kv: abs(float(kv[0]) - spot))
+        iv = closest[1][0].get("volatility")
+        if iv and iv > 0:
+            return float(spot), float(iv) / 100
+    return None
+
+
+def strike_touch_probabilities(strikes: list[float]) -> dict:
+    """{'spot': float, 'iv': float, 'probabilities': {strike: prob}} -- the
+    plain probability that SPX itself touches each given strike before
+    today's close, using the ATM contract's own IV. {} if unavailable."""
+    client = get_client(interactive=False)
+    atm = _atm_iv_and_spot(client)
+    if not atm:
+        return {}
+    spot, iv = atm
+    years = _time_to_expiry_years()
+    probs = {}
+    for k in strikes:
+        p = touch_probability(spot, k, iv, years)
+        if p is not None:
+            probs[k] = p
+    return {"spot": spot, "iv": iv, "probabilities": probs}
+
+
+def option_chain_lookup(symbol: str = "$SPX") -> dict:
+    """{(strike, 'C'|'P'): contract_dict} for every contract in today's 0DTE
+    chain -- used to find each short leg's own bid/ask/IV for the
+    option-price-barrier stop-probability calculation, since a stop defined
+    in option-price terms (a $ or % loss) needs that specific contract's own
+    vol, not the ATM contract's."""
+    from datetime import date
+
+    client = get_client(interactive=False)
+    resp = client.get_option_chain(
+        symbol,
+        contract_type=client.Options.ContractType.ALL,
+        include_underlying_quote=True,
+        from_date=date.today(),
+        to_date=date.today(),
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    spot = (data.get("underlying") or {}).get("mark") or (data.get("underlying") or {}).get("last")
+    out: dict = {"spot": float(spot) if spot else None, "contracts": {}}
+    for side, exp_map in (("C", data.get("callExpDateMap") or {}), ("P", data.get("putExpDateMap") or {})):
+        for strikes in exp_map.values():
+            for strike_str, contracts in strikes.items():
+                out["contracts"][(float(strike_str), side)] = contracts[0]
+    return out
+
+
+def option_price_barrier_probability(spot: float, strike: float, side: str, contract: dict, barrier_price: float) -> float | None:
+    """P(this specific option's price crosses `barrier_price`) before
+    expiry, by converting the option-price barrier into an implied SPX
+    barrier via the contract's own delta (first-order local approximation:
+    a dOptionPrice move corresponds to dOptionPrice / |delta| points of SPX
+    movement), then applying the same touch-probability formula to that
+    implied SPX level using the contract's own IV.
+
+    This is an approximation, not a full path-dependent option-price
+    barrier model (which would need to account for delta itself changing as
+    spot moves) -- but for a same-day 0DTE stop a few points away, the
+    local-linear approximation is standard practice and far better than
+    ignoring the option's convexity/vol entirely.
+    """
+    delta = contract.get("delta")
+    iv = contract.get("volatility")
+    mark = contract.get("mark") or contract.get("last")
+    if not delta or not iv or iv <= 0 or mark is None:
+        return None
+    delta = abs(delta)
+    price_move_needed = barrier_price - mark  # positive: option needs to gain value to hit the stop
+    spot_points_needed = price_move_needed / delta
+    # A short call's price rises as spot rises; a short put's price rises as
+    # spot falls -- so the SPX barrier is spot +points for a call's stop,
+    # spot -points for a put's stop (points itself may be negative if the
+    # option is already past its stop price).
+    direction = 1 if side == "C" else -1
+    implied_barrier = spot + direction * spot_points_needed
+    years = _time_to_expiry_years()
+    return touch_probability(spot, implied_barrier, iv / 100, years)
+
+
+def stop_probabilities_by_strike(positions: list[dict]) -> dict:
+    """{(strike, 'C'|'P'): probability} -- for every short leg across all
+    open positions, the probability its own stop actually triggers before
+    today's close. Where a strike has multiple legs (several positions
+    sharing it), returns their qty-weighted average probability.
+
+    Skips legs with no parseable stop (resolve_stop_barrier returned None)
+    or missing chain data for that specific contract -- callers should treat
+    a strike absent from the result as "unknown", not "zero risk".
+    """
+    import tradesteward_fetch as tsf
+
+    chain = option_chain_lookup()
+    spot = chain.get("spot")
+    contracts = chain.get("contracts", {})
+    if not spot:
+        return {}
+
+    weighted: dict[tuple[float, str], list[tuple[float, float]]] = {}  # key -> [(prob, weight), ...]
+    for pos in positions:
+        for leg_str in pos.get("legs", []):
+            leg = tsf.parse_leg(leg_str)
+            if not leg or leg["qty"] >= 0:
+                continue  # only short legs carry a stop that closes *this* position
+            barrier = tsf.resolve_stop_barrier(pos, leg)
+            if not barrier:
+                continue
+            key = (leg["strike"], leg["type"])
+            qty = -leg["qty"]
+
+            if barrier["kind"] == "spot_price":
+                years = _time_to_expiry_years()
+                # Use the specific contract's own IV if we have it, else skip
+                # rather than guess with an unrelated vol figure.
+                contract = contracts.get(key)
+                iv = contract.get("volatility") if contract else None
+                if not iv or iv <= 0:
+                    continue
+                prob = touch_probability(spot, barrier["price"], iv / 100, years)
+            else:  # option_price
+                contract = contracts.get(key)
+                if not contract:
+                    continue
+                prob = option_price_barrier_probability(spot, leg["strike"], leg["type"], contract, barrier["price"])
+
+            if prob is not None:
+                weighted.setdefault(key, []).append((prob, qty))
+
+    out = {}
+    for key, entries in weighted.items():
+        total_w = sum(w for _, w in entries)
+        if total_w:
+            out[key] = sum(p * w for p, w in entries) / total_w
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description="Schwab API credential setup / login.")
     ap.add_argument(

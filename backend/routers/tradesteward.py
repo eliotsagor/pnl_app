@@ -93,6 +93,14 @@ def _run_fetch_risk(job_id: str):
             expected_move = schwab_client.spx_expected_move_remaining()
         except Exception:
             expected_move = {}
+        try:
+            stop_probs = schwab_client.stop_probabilities_by_strike(positions)
+            for row in strikes:
+                prob = stop_probs.get((row["strike"], row["type"]))
+                if prob is not None:
+                    row["stop_probability"] = prob
+        except Exception:
+            pass  # stop-probability is best-effort; strikes still render without it
         jobs.update_job(
             job_id, status="done", result={"strikes": strikes, "quote": quote, "expected_move": expected_move}
         )
