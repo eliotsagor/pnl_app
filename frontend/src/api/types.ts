@@ -34,6 +34,8 @@ export interface StrikeRow {
   at_risk: number;
   positions: number;
   stop_probability?: number; // 0-1, probability this strike's stop triggers before close; absent if unknown
+  is_bic: boolean;
+  is_elmo: boolean;
 }
 
 export interface SpxQuote {

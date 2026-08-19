@@ -1,4 +1,4 @@
-import { Alert, Box, Button, CircularProgress, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from "@mui/material";
+import { Alert, Box, Button, Chip, CircularProgress, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import { tradestewardApi } from "../api/tradesteward";
 import { useAutoRefreshJob } from "../hooks/useAutoRefreshJob";
@@ -125,6 +125,20 @@ export default function RiskDashboardPage() {
     >
       <TableCell sx={{ fontVariantNumeric: "tabular-nums" }}>
         {r.strike.toLocaleString()} {r.type}
+        {r.is_elmo && (
+          <Chip
+            label="Elmo"
+            size="small"
+            sx={{ ml: 0.75, height: 18, fontSize: "0.65rem", bgcolor: "#3987e5", color: "#fff" }}
+          />
+        )}
+        {r.is_bic && (
+          <Chip
+            label="BIC"
+            size="small"
+            sx={{ ml: 0.75, height: 18, fontSize: "0.65rem", bgcolor: COLOR_WARNING, color: "#000" }}
+          />
+        )}
       </TableCell>
       <TableCell align="right" sx={{ fontVariantNumeric: "tabular-nums", color: "text.secondary" }}>
         {hasQuote ? fmtDistance(r.strike, quote!.price!) : "—"}
@@ -148,7 +162,7 @@ export default function RiskDashboardPage() {
   );
 
   return (
-    <Box sx={{ maxWidth: 1200, mx: "auto", px: 3, pb: 4 }}>
+    <Box sx={{ maxWidth: 1800, mx: "auto", px: 3, pb: 4 }}>
       <Box sx={{ display: "flex", alignItems: "baseline", gap: 2, mb: 2 }}>
         <Typography variant="h5" sx={{ fontWeight: 700 }}>
           {hasQuote ? `SPX ${fmtPrice(quote!.price!)}` : "SPX —"}
@@ -257,6 +271,8 @@ export default function RiskDashboardPage() {
       )}
 
       {data && (calls.length > 0 || puts.length > 0) && (
+      <Box sx={{ display: "flex", gap: 3, alignItems: "flex-start" }}>
+        <Box sx={{ flex: "0 0 480px", minWidth: 0 }}>
         <TableContainer sx={{ border: "1px solid rgba(255,255,255,0.10)", borderRadius: "12px" }}>
           <Table size="small">
             <TableHead>
@@ -318,9 +334,7 @@ export default function RiskDashboardPage() {
             </TableBody>
           </Table>
         </TableContainer>
-      )}
 
-      {data && (calls.length > 0 || puts.length > 0) && (
         <Box sx={{ display: "flex", gap: 2, mt: 2 }}>
           <Box sx={{ flex: 1, p: 2, borderRadius: "12px", border: "1px solid rgba(255,255,255,0.10)" }}>
             <Typography variant="subtitle2" sx={{ mb: 1 }}>
@@ -381,10 +395,10 @@ export default function RiskDashboardPage() {
             </Box>
           </Box>
         </Box>
-      )}
+        </Box>
 
-      {data && data.positions && data.positions.some((p) => p.ev != null) && (
-        <Box sx={{ mt: 3 }}>
+        {data.positions && data.positions.some((p) => p.ev != null) && (
+        <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="subtitle2" sx={{ mb: 1 }}>
             Expected value of holding
           </Typography>
@@ -428,6 +442,8 @@ export default function RiskDashboardPage() {
             </Table>
           </TableContainer>
         </Box>
+        )}
+      </Box>
       )}
     </Box>
   );
