@@ -34,6 +34,7 @@ export interface StrikeRow {
   at_risk: number;
   positions: number;
   stop_probability?: number; // 0-1, probability this strike's stop triggers before close; absent if unknown
+  at_risk_in_em?: number; // at_risk * stop_probability -- the portion of max loss realistically in play today
   is_bic: boolean;
   is_elmo: boolean;
 }
