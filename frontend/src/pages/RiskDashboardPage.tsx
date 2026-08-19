@@ -105,7 +105,7 @@ export default function RiskDashboardPage() {
     const out: ({ kind: "row"; row: StrikeRow } | { kind: "marker" })[] = [];
     let inserted = false;
     for (const r of rows) {
-      const crossed = side === "up" ? r.strike <= boundary : r.strike >= boundary;
+      const crossed = side === "up" ? r.strike <= boundary : r.strike < boundary;
       if (crossed && !inserted) {
         out.push({ kind: "marker" });
         inserted = true;
