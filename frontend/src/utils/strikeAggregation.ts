@@ -33,24 +33,16 @@ function shortStrikesBySide(position: Position): { C: Leg[]; P: Leg[] } {
 }
 
 /** Client-side re-implementation of tradesteward_fetch.aggregate_short_strikes
- * + the stop_probability/at_risk_in_em attachment done server-side, so the
- * strikes table can be recomputed live from an arbitrary filtered subset of
+ * + the stop_probability/ev attachment done server-side, so the strikes
+ * table can be recomputed live from an arbitrary filtered subset of
  * positions (the Elmo/BIC/Other and per-bot checkboxes) without a round trip.
  * Per-strike stop_probability is the qty-weighted average of the
  * contributing positions' own stop_probability (already resolved
  * server-side, including the Elmo combined-stop handling), which reproduces
- * the same numbers the backend computes for the unfiltered case.
- *
- * emBand, if given, gates at_risk_in_em to strikes within today's expected
- * move -- stop_probability is about the combined option price reaching its
- * stop (which can happen via IV/theta drift even if spot never approaches
- * the strike), so without this gate at_risk_in_em could show a large
- * number for a strike well outside the expected range. Matches the same
- * gate the backend applies. */
-export function aggregateShortStrikes(
-  positions: Position[],
-  emBand?: { low: number; high: number } | null
-): StrikeRow[] {
+ * the same numbers the backend computes for the unfiltered case. ev uses
+ * that same per-strike stop_probability against this strike's own already-
+ * split remaining/at_risk, matching the backend's model. */
+export function aggregateShortStrikes(positions: Position[]): StrikeRow[] {
   const rows = new Map<string, StrikeRow & { probWeighted: number; probWeight: number }>();
 
   for (const pos of positions) {
@@ -123,13 +115,14 @@ export function aggregateShortStrikes(
     .map((r) => {
       const { probWeighted, probWeight, ...row } = r;
       if (probWeight > 0) {
-        row.stop_probability = probWeighted / probWeight;
+        const p = probWeighted / probWeight;
+        row.stop_probability = p;
+        // Same model as the EV-of-holding table: (1-p_stop) x what's left
+        // if this decays to worthless, minus p_stop x the real give-back
+        // to the stop -- doesn't need a separate P(capture) estimate since
+        // "not stopped" is tied to a realistic (not maximal) payoff.
+        row.ev = (1 - p) * row.remaining - p * row.at_risk;
       }
-      // at_risk is never probability-weighted -- at_risk_in_em is the same
-      // hard $ figure, just scoped to whether the strike sits within
-      // today's expected move (Stop% already shows likelihood separately).
-      const inEm = !emBand || (row.strike >= emBand.low && row.strike <= emBand.high);
-      row.at_risk_in_em = inEm ? row.at_risk : 0;
       return row;
     })
     .sort((a, b) => (a.type === "C" ? 1 : 0) - (b.type === "C" ? 1 : 0) || a.strike - b.strike);
