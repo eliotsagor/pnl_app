@@ -291,6 +291,28 @@ def position_give_back(position: dict) -> float | None:
     return max(barrier["price"] - current, 0.0) * qty * 100
 
 
+def position_remaining_value(position: dict) -> float | None:
+    """The $ still left to capture if this position simply decays to
+    worthless by expiry -- current_combined_price * qty * 100. Unlike
+    max_profit - captured (which assumes max_profit is a real fixed
+    ceiling), this doesn't depend on a profit_target existing: TradeSteward
+    appears to just report current running profit as max_profit when there
+    is no target ("None"), which makes max_profit - captured always
+    compute to 0 for those positions even though there's real premium left
+    to decay away. Returns None if there's no current-price data to read
+    (shouldn't happen for an open position with short legs).
+    """
+    sides = short_strikes_by_side(position)
+    all_short_legs = sides["C"] + sides["P"]
+    if not all_short_legs:
+        return None
+    current = current_combined_price(position)
+    if current is None:
+        return None
+    qty = abs(all_short_legs[0]["qty"])
+    return max(current, 0.0) * qty * 100
+
+
 def short_strikes_by_side(position: dict) -> dict[str, list[dict]]:
     """Split a position's short (qty < 0) legs into {'C': [...], 'P': [...]}."""
     out: dict[str, list[dict]] = {"C": [], "P": []}
@@ -304,15 +326,18 @@ def short_strikes_by_side(position: dict) -> dict[str, list[dict]]:
 def aggregate_short_strikes(positions: list[dict]) -> list[dict]:
     """Group every open position's short legs by strike, splitting each
     position's captured-so-far $ (current running P&L), remaining-to-capture
-    $ (max profit ceiling minus what's already captured), and at-risk $
-    (max loss) between its call side and put side.
+    $ (what's left if the position decays to worthless by expiry), and
+    at-risk $ (real give-back to the stop, from today's value) between its
+    call side and put side.
 
-    A position's running P&L (profit_dollars) climbs from 0 toward its
-    max_profit ceiling as the trade decays favorably -- "captured so far" is
-    that running value (floored at 0; a position currently underwater hasn't
-    captured anything yet), and "remaining" is max_profit minus that, which
-    naturally exceeds max_profit while the position is underwater (there's
-    more than the full ceiling left to go until breakeven, then capture).
+    "Captured so far" is the running profit_dollars value (floored at 0; a
+    position currently underwater hasn't captured anything yet).
+    "Remaining" is position_remaining_value -- the current combined option
+    value, i.e. what's still on the table if this simply expires worthless
+    -- not max_profit minus captured, since TradeSteward's max_profit field
+    appears to just mirror current profit (not a real ceiling) whenever
+    there's no profit_target set, which would make that subtraction always
+    read 0 for those positions despite real premium remaining.
 
     - A one-sided position (short legs on only one side -- e.g. a vertical)
       puts its full captured/remaining/at-risk on that side.
@@ -335,9 +360,15 @@ def aggregate_short_strikes(positions: list[dict]) -> list[dict]:
         has_put = bool(sides["P"])
         share = 0.5 if (has_call and has_put) else 1.0
 
-        max_profit = abs(parse_money(pos.get("max_profit", "0") or "0"))
         captured = max(parse_money(pos.get("profit_dollars", "0") or "0"), 0.0)
-        remaining = max_profit - captured
+
+        # What's left to capture if this decays to worthless by expiry, not
+        # max_profit-minus-captured -- TradeSteward's max_profit field
+        # appears to just track current profit (not a real ceiling) when
+        # there's no profit_target set, which made remaining always read $0
+        # for those positions even with real premium left on the table.
+        remaining_value = position_remaining_value(pos)
+        remaining = remaining_value if remaining_value is not None else 0.0
 
         # Real $ given back from today's current value if the stop
         # triggers, not the static entry-based max_loss ceiling -- a

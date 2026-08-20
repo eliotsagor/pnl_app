@@ -71,6 +71,7 @@ export interface Position {
   max_profit: string;
   max_loss: string;
   at_risk?: number; // $ given back from today's value if the stop triggers -- see position_give_back
+  remaining?: number; // $ still on the table if this decays to worthless by expiry -- see position_remaining_value
   stop_probability?: number; // 0-1, probability this position's stop triggers before close
   ev?: number; // expected value of continuing to hold, $
   delta?: number; // this position's own net delta (short + long legs), underlying-equivalent shares

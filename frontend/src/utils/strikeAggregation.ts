@@ -49,7 +49,6 @@ export function aggregateShortStrikes(positions: Position[]): StrikeRow[] {
     const hasPut = sides.P.length > 0;
     const share = hasCall && hasPut ? 0.5 : 1.0;
 
-    const maxProfit = Math.abs(parseMoney(pos.max_profit));
     // Real $ given back from today's value if the stop triggers (computed
     // server-side by position_give_back, exposed as pos.at_risk), not the
     // static entry-based max_loss -- a position sitting on banked profit
@@ -58,7 +57,12 @@ export function aggregateShortStrikes(positions: Position[]): StrikeRow[] {
     // cached result).
     const atRisk = pos.at_risk != null ? pos.at_risk : Math.abs(parseMoney(pos.max_loss));
     const captured = Math.max(parseMoney(pos.profit_dollars), 0);
-    const remaining = maxProfit - captured;
+    // What's left to capture if this decays to worthless by expiry
+    // (server-side position_remaining_value, exposed as pos.remaining),
+    // not max_profit-minus-captured -- that reads $0 whenever TradeSteward
+    // has no profit_target set, since its max_profit field just mirrors
+    // current profit in that case rather than being a real ceiling.
+    const remaining = pos.remaining != null ? pos.remaining : Math.max(Math.abs(parseMoney(pos.max_profit)) - captured, 0);
 
     for (const side of ["C", "P"] as const) {
       const legs = sides[side];

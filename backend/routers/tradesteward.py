@@ -96,6 +96,13 @@ def _run_fetch_risk(job_id: str):
             # scope-aware logic in TypeScript.
             give_back = tsf.position_give_back(pos)
             pos["at_risk"] = give_back if give_back is not None else abs(tsf.parse_money(pos.get("max_loss", "0") or "0"))
+            # What's left to capture if this decays to worthless by expiry --
+            # not max_profit-minus-captured, which reads 0 whenever
+            # TradeSteward has no profit_target set (see
+            # position_remaining_value). Also exposed for client-side
+            # re-aggregation, same reasoning as at_risk above.
+            remaining_value = tsf.position_remaining_value(pos)
+            pos["remaining"] = remaining_value if remaining_value is not None else 0.0
         strikes = tsf.aggregate_short_strikes(positions)
         try:
             quote = quotes.spx_quote()
