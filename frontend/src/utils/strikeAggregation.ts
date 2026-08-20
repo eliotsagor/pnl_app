@@ -39,8 +39,18 @@ function shortStrikesBySide(position: Position): { C: Leg[]; P: Leg[] } {
  * Per-strike stop_probability is the qty-weighted average of the
  * contributing positions' own stop_probability (already resolved
  * server-side, including the Elmo combined-stop handling), which reproduces
- * the same numbers the backend computes for the unfiltered case. */
-export function aggregateShortStrikes(positions: Position[]): StrikeRow[] {
+ * the same numbers the backend computes for the unfiltered case.
+ *
+ * emBand, if given, gates at_risk_in_em to strikes within today's expected
+ * move -- stop_probability is about the combined option price reaching its
+ * stop (which can happen via IV/theta drift even if spot never approaches
+ * the strike), so without this gate at_risk_in_em could show a large
+ * number for a strike well outside the expected range. Matches the same
+ * gate the backend applies. */
+export function aggregateShortStrikes(
+  positions: Position[],
+  emBand?: { low: number; high: number } | null
+): StrikeRow[] {
   const rows = new Map<string, StrikeRow & { probWeighted: number; probWeight: number }>();
 
   for (const pos of positions) {
@@ -111,7 +121,8 @@ export function aggregateShortStrikes(positions: Position[]): StrikeRow[] {
       const { probWeighted, probWeight, ...row } = r;
       if (probWeight > 0) {
         row.stop_probability = probWeighted / probWeight;
-        row.at_risk_in_em = row.at_risk * row.stop_probability;
+        const inEm = !emBand || (row.strike >= emBand.low && row.strike <= emBand.high);
+        row.at_risk_in_em = inEm ? row.at_risk * row.stop_probability : 0;
       }
       return row;
     })
