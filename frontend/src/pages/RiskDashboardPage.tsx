@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   Alert,
   Box,
@@ -111,22 +111,22 @@ export default function RiskDashboardPage() {
   // which positions feed the left grid, the net delta/gamma header, and the
   // call/put footers -- independent AND filters, so a bot only shows if
   // both its category and its own checkbox are checked.
+  //
+  // Per-bot state is a set of *unchecked* bot_names, not checked serials:
+  // serial is per-fetch (auto-refresh every 30s gets a fresh set), so
+  // tracking by serial meant every refresh silently re-checked everything,
+  // wiping out a user's unchecks. bot_name is stable across fetches for
+  // the same still-open position, so an unchecked-by-name set survives a
+  // refresh; new bots that appear later default to checked (absent from
+  // the unchecked set).
   const [showElmo, setShowElmo] = useState(true);
   const [showBic, setShowBic] = useState(true);
   const [showOther, setShowOther] = useState(true);
-  const [checkedSerials, setCheckedSerials] = useState<Set<number> | null>(null);
-
-  // New data (a fresh fetch) re-checks every bot by default rather than
-  // carrying forward a stale selection from a prior set of positions.
-  useEffect(() => {
-    if (data?.positions) {
-      setCheckedSerials(new Set(data.positions.map((p) => p.serial)));
-    }
-  }, [data]);
+  const [uncheckedNames, setUncheckedNames] = useState<Set<string>>(new Set());
 
   const allPositions = data?.positions ?? [];
   const filteredPositions = allPositions.filter((p) => {
-    if (checkedSerials && !checkedSerials.has(p.serial)) return false;
+    if (uncheckedNames.has(p.bot_name)) return false;
     if (p.is_elmo && !showElmo) return false;
     if (p.is_bic && !showBic) return false;
     if (isOther(p) && !showOther) return false;
@@ -135,16 +135,17 @@ export default function RiskDashboardPage() {
   const filteredStrikes = aggregateShortStrikes(filteredPositions);
   const filteredGreeks = netGreeksFor(filteredPositions);
 
-  const allChecked = checkedSerials != null && allPositions.length > 0 && checkedSerials.size === allPositions.length;
-  const someChecked = checkedSerials != null && checkedSerials.size > 0 && !allChecked;
+  const checkedCount = allPositions.filter((p) => !uncheckedNames.has(p.bot_name)).length;
+  const allChecked = allPositions.length > 0 && checkedCount === allPositions.length;
+  const someChecked = checkedCount > 0 && !allChecked;
   const toggleAll = () => {
-    setCheckedSerials(allChecked ? new Set() : new Set(allPositions.map((p) => p.serial)));
+    setUncheckedNames(allChecked ? new Set(allPositions.map((p) => p.bot_name)) : new Set());
   };
-  const toggleOne = (serial: number) => {
-    setCheckedSerials((prev) => {
+  const toggleOne = (botName: string) => {
+    setUncheckedNames((prev) => {
       const next = new Set(prev);
-      if (next.has(serial)) next.delete(serial);
-      else next.add(serial);
+      if (next.has(botName)) next.delete(botName);
+      else next.add(botName);
       return next;
     });
   };
@@ -583,8 +584,8 @@ export default function RiskDashboardPage() {
                       <TableCell padding="checkbox">
                         <Checkbox
                           size="small"
-                          checked={checkedSerials?.has(p.serial) ?? true}
-                          onChange={() => toggleOne(p.serial)}
+                          checked={!uncheckedNames.has(p.bot_name)}
+                          onChange={() => toggleOne(p.bot_name)}
                         />
                       </TableCell>
                       <TableCell>
