@@ -112,6 +112,26 @@ def _run_fetch_risk(job_id: str):
             expected_move = schwab_client.spx_expected_move_remaining()
         except Exception:
             expected_move = {}
+        # EM band for gating at_risk_in_em below -- stop_probability (used
+        # for the Stop% column) is about the *combined option price*
+        # reaching its stop, which can happen via IV/theta drift even if
+        # spot never approaches the strike, so it's not itself a "was this
+        # strike in play today" signal. at_risk_in_em specifically means
+        # risk realistically in play *within the expected move*, so it's
+        # zeroed for any strike outside that band regardless of what
+        # stop_probability says -- a coarse but legible gate; note EM
+        # itself is the market's ~1-standard-deviation move by expiration
+        # (from the ATM straddle), a narrower notion than "touch
+        # probability" (odds of reaching a level at any point intraday),
+        # so a strike just outside EM can still have real intraday risk
+        # this doesn't capture.
+        em_low = em_high = None
+        spot_px = quote.get("price")
+        em_amount = expected_move.get("expected_move")
+        if spot_px is not None and em_amount is not None:
+            em_low = spot_px - em_amount
+            em_high = spot_px + em_amount
+
         try:
             stop_probs = schwab_client.stop_probabilities_by_strike(positions)
             for row in strikes:
@@ -122,7 +142,8 @@ def _run_fetch_risk(job_id: str):
                     # actually likely to happen today -- weighting by stop
                     # probability turns a static worst-case figure into "how
                     # much of this risk is realistically in play right now."
-                    row["at_risk_in_em"] = row["at_risk"] * prob
+                    in_em = em_low is not None and em_low <= row["strike"] <= em_high
+                    row["at_risk_in_em"] = (row["at_risk"] * prob) if in_em else 0.0
         except Exception:
             pass  # stop-probability is best-effort; strikes still render without it
         try:

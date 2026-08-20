@@ -124,6 +124,14 @@ export default function RiskDashboardPage() {
   const [showOther, setShowOther] = useState(true);
   const [uncheckedNames, setUncheckedNames] = useState<Set<string>>(new Set());
 
+  const quote = data?.quote;
+  const hasQuote = quote && quote.price != null;
+  const em = data?.expected_move;
+  const hasEm = hasQuote && em?.expected_move != null;
+  const emUp = hasEm ? quote!.price! + em!.expected_move! : null;
+  const emDown = hasEm ? quote!.price! - em!.expected_move! : null;
+  const emBand = hasEm ? { low: emDown!, high: emUp! } : null;
+
   const allPositions = data?.positions ?? [];
   const filteredPositions = allPositions.filter((p) => {
     if (uncheckedNames.has(p.bot_name)) return false;
@@ -132,7 +140,7 @@ export default function RiskDashboardPage() {
     if (isOther(p) && !showOther) return false;
     return true;
   });
-  const filteredStrikes = aggregateShortStrikes(filteredPositions);
+  const filteredStrikes = aggregateShortStrikes(filteredPositions, emBand);
   const filteredGreeks = netGreeksFor(filteredPositions);
 
   const checkedCount = allPositions.filter((p) => !uncheckedNames.has(p.bot_name)).length;
@@ -158,14 +166,7 @@ export default function RiskDashboardPage() {
   const sum = (rows: StrikeRow[], key: "captured" | "remaining" | "at_risk" | "at_risk_in_em") =>
     rows.reduce((s, r) => s + (r[key] ?? 0), 0);
 
-  const quote = data?.quote;
-  const hasQuote = quote && quote.price != null;
   const changeColor = quote?.change != null ? (quote.change >= 0 ? COLOR_GOOD : COLOR_CRITICAL) : "text.secondary";
-
-  const em = data?.expected_move;
-  const hasEm = hasQuote && em?.expected_move != null;
-  const emUp = hasEm ? quote!.price! + em!.expected_move! : null;
-  const emDown = hasEm ? quote!.price! - em!.expected_move! : null;
 
   // Insert an EM marker into a strike list (already sorted furthest-to-closest
   // relative to spot) right before the first row whose strike has crossed
