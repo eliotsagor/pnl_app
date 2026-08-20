@@ -84,6 +84,10 @@ def _run_fetch_risk(job_id: str):
     try:
         jobs.update_job(job_id, status="running")
         positions = tsf.fetch_open_positions(headless=False, on_waiting=lambda: _on_waiting(job_id))
+        for pos in positions:
+            name = (pos.get("bot_name") or "").upper()
+            pos["is_bic"] = "BIC" in name
+            pos["is_elmo"] = "PAIC" in name
         strikes = tsf.aggregate_short_strikes(positions)
         try:
             quote = quotes.spx_quote()

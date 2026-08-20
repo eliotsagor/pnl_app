@@ -1,10 +1,31 @@
-import { Alert, Box, Button, Chip, CircularProgress, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Typography } from "@mui/material";
+import { useEffect, useState } from "react";
+import {
+  Alert,
+  Box,
+  Button,
+  Checkbox,
+  Chip,
+  CircularProgress,
+  FormControlLabel,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Typography,
+} from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import { tradestewardApi } from "../api/tradesteward";
 import { useAutoRefreshJob } from "../hooks/useAutoRefreshJob";
 import { useResizableSplit } from "../hooks/useResizableSplit";
 import type { StrikeRow, SpxQuote, ExpectedMove, NetGreeks, Position } from "../api/types";
+import { aggregateShortStrikes, netGreeksFor } from "../utils/strikeAggregation";
 import { COLOR_GOOD, COLOR_CRITICAL, COLOR_WARNING } from "../theme";
+
+function isOther(p: Position) {
+  return !p.is_bic && !p.is_elmo;
+}
 
 function fmtMoney(v: number) {
   return `$${Math.round(Math.abs(v)).toLocaleString()}`;
@@ -86,10 +107,52 @@ export default function RiskDashboardPage() {
     useAutoRefreshJob<RiskResult>(tradestewardApi.fetchRisk);
   const { width: leftWidth, onDividerMouseDown } = useResizableSplit("risk-split-width", 680, 420, 1200);
 
+  // Category checkboxes (Elmo/BIC/Other) and per-bot checkboxes both narrow
+  // which positions feed the left grid, the net delta/gamma header, and the
+  // call/put footers -- independent AND filters, so a bot only shows if
+  // both its category and its own checkbox are checked.
+  const [showElmo, setShowElmo] = useState(true);
+  const [showBic, setShowBic] = useState(true);
+  const [showOther, setShowOther] = useState(true);
+  const [checkedSerials, setCheckedSerials] = useState<Set<number> | null>(null);
+
+  // New data (a fresh fetch) re-checks every bot by default rather than
+  // carrying forward a stale selection from a prior set of positions.
+  useEffect(() => {
+    if (data?.positions) {
+      setCheckedSerials(new Set(data.positions.map((p) => p.serial)));
+    }
+  }, [data]);
+
+  const allPositions = data?.positions ?? [];
+  const filteredPositions = allPositions.filter((p) => {
+    if (checkedSerials && !checkedSerials.has(p.serial)) return false;
+    if (p.is_elmo && !showElmo) return false;
+    if (p.is_bic && !showBic) return false;
+    if (isOther(p) && !showOther) return false;
+    return true;
+  });
+  const filteredStrikes = aggregateShortStrikes(filteredPositions);
+  const filteredGreeks = netGreeksFor(filteredPositions);
+
+  const allChecked = checkedSerials != null && allPositions.length > 0 && checkedSerials.size === allPositions.length;
+  const someChecked = checkedSerials != null && checkedSerials.size > 0 && !allChecked;
+  const toggleAll = () => {
+    setCheckedSerials(allChecked ? new Set() : new Set(allPositions.map((p) => p.serial)));
+  };
+  const toggleOne = (serial: number) => {
+    setCheckedSerials((prev) => {
+      const next = new Set(prev);
+      if (next.has(serial)) next.delete(serial);
+      else next.add(serial);
+      return next;
+    });
+  };
+
   // Closest-to-spot strikes sit nearest the spot divider on both sides:
   // calls descend toward it from above, puts descend away from it below.
-  const calls = (data?.strikes ?? []).filter((r) => r.type === "C").sort((a, b) => b.strike - a.strike);
-  const puts = (data?.strikes ?? []).filter((r) => r.type === "P").sort((a, b) => b.strike - a.strike);
+  const calls = filteredStrikes.filter((r) => r.type === "C").sort((a, b) => b.strike - a.strike);
+  const puts = filteredStrikes.filter((r) => r.type === "P").sort((a, b) => b.strike - a.strike);
 
   const sum = (rows: StrikeRow[], key: "captured" | "remaining" | "at_risk" | "at_risk_in_em") =>
     rows.reduce((s, r) => s + (r[key] ?? 0), 0);
@@ -207,22 +270,22 @@ export default function RiskDashboardPage() {
         </Button>
       </Box>
 
-      {data?.greeks && data.greeks.net_delta != null && (
+      {filteredGreeks && (
         <Box sx={{ display: "flex", gap: 4, mb: 2, flexWrap: "wrap" }}>
           <Box>
             <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
               Net delta
             </Typography>
             <Typography variant="h6" sx={{ fontWeight: 600 }}>
-              {fmtSigned(data.greeks.net_delta)}
+              {fmtSigned(filteredGreeks.net_delta)}
             </Typography>
           </Box>
           <Box>
             <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
               Net gamma
             </Typography>
-            <Typography variant="h6" sx={{ fontWeight: 600, color: (data.greeks.net_gamma ?? 0) < 0 ? COLOR_CRITICAL : "text.primary" }}>
-              {fmtSigned(data.greeks.net_gamma ?? 0, 1)}
+            <Typography variant="h6" sx={{ fontWeight: 600, color: filteredGreeks.net_gamma < 0 ? COLOR_CRITICAL : "text.primary" }}>
+              {fmtSigned(filteredGreeks.net_gamma, 1)}
             </Typography>
           </Box>
           <Box>
@@ -230,7 +293,7 @@ export default function RiskDashboardPage() {
               δ @ -10pt
             </Typography>
             <Typography variant="h6" sx={{ fontWeight: 600, color: COLOR_WARNING }}>
-              {fmtSigned(data.greeks.delta_at_minus_10 ?? 0)}
+              {fmtSigned(filteredGreeks.delta_at_minus_10)}
             </Typography>
           </Box>
           <Box>
@@ -238,9 +301,38 @@ export default function RiskDashboardPage() {
               δ @ +10pt
             </Typography>
             <Typography variant="h6" sx={{ fontWeight: 600 }}>
-              {fmtSigned(data.greeks.delta_at_plus_10 ?? 0)}
+              {fmtSigned(filteredGreeks.delta_at_plus_10)}
             </Typography>
           </Box>
+        </Box>
+      )}
+
+      {data && allPositions.length > 0 && (
+        <Box sx={{ display: "flex", gap: 2, mb: 2 }}>
+          <FormControlLabel
+            control={<Checkbox size="small" checked={showElmo} onChange={(e) => setShowElmo(e.target.checked)} />}
+            label={
+              <Typography variant="body2" sx={{ color: "#3987e5" }}>
+                Elmo
+              </Typography>
+            }
+          />
+          <FormControlLabel
+            control={<Checkbox size="small" checked={showBic} onChange={(e) => setShowBic(e.target.checked)} />}
+            label={
+              <Typography variant="body2" sx={{ color: COLOR_WARNING }}>
+                BIC
+              </Typography>
+            }
+          />
+          <FormControlLabel
+            control={<Checkbox size="small" checked={showOther} onChange={(e) => setShowOther(e.target.checked)} />}
+            label={
+              <Typography variant="body2" color="text.secondary">
+                Other
+              </Typography>
+            }
+          />
         </Box>
       )}
 
@@ -451,6 +543,14 @@ export default function RiskDashboardPage() {
             <Table size="small">
               <TableHead>
                 <TableRow sx={{ bgcolor: "background.paper" }}>
+                  <TableCell padding="checkbox">
+                    <Checkbox
+                      size="small"
+                      checked={allChecked}
+                      indeterminate={someChecked}
+                      onChange={toggleAll}
+                    />
+                  </TableCell>
                   <TableCell sx={{ fontWeight: 600 }}>Bot</TableCell>
                   <TableCell sx={{ fontWeight: 600 }}>Strategy</TableCell>
                   <TableCell align="right" sx={{ fontWeight: 600 }}>
@@ -473,6 +573,13 @@ export default function RiskDashboardPage() {
                   .sort((a, b) => (a.ev ?? 0) - (b.ev ?? 0))
                   .map((p) => (
                     <TableRow key={p.serial} hover>
+                      <TableCell padding="checkbox">
+                        <Checkbox
+                          size="small"
+                          checked={checkedSerials?.has(p.serial) ?? true}
+                          onChange={() => toggleOne(p.serial)}
+                        />
+                      </TableCell>
                       <TableCell>
                         <Typography variant="body2">{p.bot_name}</Typography>
                       </TableCell>
