@@ -369,13 +369,19 @@ export default function RiskDashboardPage() {
         </Alert>
       )}
 
-      {data && calls.length === 0 && puts.length === 0 && (
+      {data && allPositions.length === 0 && (
         <Typography color="text.secondary">No short options open right now.</Typography>
       )}
 
-      {data && (calls.length > 0 || puts.length > 0) && (
+      {data && allPositions.length > 0 && (
       <Box sx={{ display: "flex", alignItems: "flex-start" }}>
         <Box sx={{ flex: `0 0 ${leftWidth}px`, minWidth: 0 }}>
+        {calls.length === 0 && puts.length === 0 && (
+          <Typography color="text.secondary" sx={{ mb: 2 }}>
+            No positions match the current filters.
+          </Typography>
+        )}
+        {(calls.length > 0 || puts.length > 0) && (
         <TableContainer sx={{ border: "1px solid rgba(255,255,255,0.10)", borderRadius: "12px" }}>
           <Table size="small">
             <TableHead>
@@ -440,6 +446,7 @@ export default function RiskDashboardPage() {
             </TableBody>
           </Table>
         </TableContainer>
+        )}
 
         <Box sx={{ display: "flex", gap: 2, mt: 2 }}>
           <Box sx={{ flex: 1, p: 2, borderRadius: "12px", border: "1px solid rgba(255,255,255,0.10)" }}>
