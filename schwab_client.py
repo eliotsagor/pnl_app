@@ -340,28 +340,46 @@ def _leg_stop_probability(spot: float, contracts: dict, pos: dict, leg: dict, ba
     return option_price_barrier_probability(spot, leg["strike"], leg["type"], contract, barrier["price"])
 
 
+def _is_combined_move_position(position: dict) -> bool:
+    """True for a position whose short legs genuinely move together as one
+    combined price (an "Elmo" -- bot name contains "PAIC" -- which trades
+    like a short strangle: both sides' option prices contribute to the same
+    combined stop threshold). False for a BIC-style position, where each
+    side is its own independent vertical even on the rare occasion a call
+    side and put side happen to open as one position object -- BICs stop
+    each side separately, so the *other* side's delta must not be used to
+    help "offset" a side's own move toward its stop the way it legitimately
+    would for a true combined (net-delta) position."""
+    return "PAIC" in (position.get("bot_name") or "").upper()
+
+
 def position_side_stop_probability(spot: float, contracts: dict, pos: dict, side: str) -> float | None:
     """For a 'position'-scope stop ($X Loss, X% Loss, or a live trail --
-    see resolve_stop_barrier) on a two-sided combined position (an Elmo,
-    which stops like a short strangle: one combined $ threshold, triggered
-    by a big move in *either* direction), this estimates the probability
-    that *this side's* move is the one that pushes the combined position to
-    its stop -- using this side's own short leg(s) delta/IV against the
-    combined threshold and combined current price, as if this side alone
-    had to cover the full remaining distance.
+    see resolve_stop_barrier), the probability that spot moves far enough
+    to push the combined option price to its stop threshold, attributed to
+    `side` for display in the strikes table (which shows one row per
+    strike).
 
-    This is the per-strike attribution the strikes table needs (how much
-    of the combined risk to show against each short strike), not a single
-    "did the position stop at all" figure -- for that, combine both sides'
-    results via 1 - (1-p_call)(1-p_put), same pattern used elsewhere for
-    "either side triggers." Ignores that a mix of both sides moving
-    partway could also reach the threshold -- an approximation, but a
-    reasonable one for attributing risk per strike.
+    The sensitivity used to convert the combined $ distance into an implied
+    SPX distance depends on whether this position's sides genuinely share
+    one combined price or are independently-stopped verticals that happen
+    to share a position object (see _is_combined_move_position):
 
-    For a one-sided position (a normal vertical, whether independently- or
-    combined-stopped), this is just that one side's own probability -- the
-    "either direction" concern doesn't apply, so it reduces to the same
-    single-leg calculation as before.
+    - Combined (Elmo, trades like a short strangle): both legs' prices
+      move as spot moves and both contribute to reaching the combined
+      stop, so this uses the *net* delta across every short leg (both
+      sides), not just this side's own -- the put side's delta doesn't
+      fully cancel the call side's, since both are short (same-signed
+      exposure to a strangle-style position), so netting them still gives
+      a real, usually larger, combined sensitivity than either side alone.
+    - Independent (BIC-style, even if opened as one two-sided object):
+      only this side's own delta is used, since a move in the *other*
+      side's strike doesn't push *this* side's vertical toward its own
+      stop -- each side is genuinely its own trade.
+
+    Both cases produce the same probability on both strike rows only when
+    combined; independent positions can show a different probability per
+    side, correctly.
     """
     import tradesteward_fetch as tsf
 
@@ -376,10 +394,12 @@ def position_side_stop_probability(spot: float, contracts: dict, pos: dict, side
     if current is None:
         return None
 
-    side_delta = 0.0
+    legs_for_delta = (sides["C"] + sides["P"]) if _is_combined_move_position(pos) else side_legs
+
+    net_delta = 0.0
     iv_weighted = 0.0
     iv_weight = 0.0
-    for leg in side_legs:
+    for leg in legs_for_delta:
         contract = contracts.get((leg["strike"], leg["type"]))
         if not contract:
             continue
@@ -387,19 +407,22 @@ def position_side_stop_probability(spot: float, contracts: dict, pos: dict, side
         iv = contract.get("volatility")
         qty = abs(leg["qty"])
         if delta is not None:
-            side_delta += abs(delta) * qty
+            net_delta += abs(delta) * qty
         if iv:
             iv_weighted += iv * qty
             iv_weight += qty
-    if side_delta <= 0 or iv_weight <= 0:
+    if net_delta <= 0 or iv_weight <= 0:
         return None
     avg_iv = iv_weighted / iv_weight
 
     price_move_needed = barrier["price"] - current
-    spot_points_needed = price_move_needed / side_delta
+    spot_points_needed = price_move_needed / net_delta
     # A short call's combined-price contribution rises as spot rises; a
     # short put's rises as spot falls -- same convention as
-    # option_price_barrier_probability's single-leg case.
+    # option_price_barrier_probability's single-leg case. For a combined
+    # position this reflects the direction *this side* moves toward the
+    # stop, which is the direction shown on this side's strike row, even
+    # though the delta magnitude used includes both sides.
     direction = 1 if side == "C" else -1
     implied_barrier = spot + direction * spot_points_needed
     years = _time_to_expiry_years()
