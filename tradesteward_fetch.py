@@ -323,7 +323,7 @@ def short_strikes_by_side(position: dict) -> dict[str, list[dict]]:
     return out
 
 
-def aggregate_short_strikes(positions: list[dict]) -> list[dict]:
+def aggregate_short_strikes(positions: list[dict], side_weights: dict | None = None) -> list[dict]:
     """Group every open position's short legs by strike, splitting each
     position's captured-so-far $ (current running P&L), remaining-to-capture
     $ (what's left if the position decays to worthless by expiry), and
@@ -342,8 +342,12 @@ def aggregate_short_strikes(positions: list[dict]) -> list[dict]:
     - A one-sided position (short legs on only one side -- e.g. a vertical)
       puts its full captured/remaining/at-risk on that side.
     - A two-sided position (short legs on both call and put side -- e.g. an
-      iron condor) splits 50/50 between the two sides, since TradeSteward
-      only reports these figures per whole position, not per leg.
+      iron condor) splits between the two sides using side_weights[serial]
+      (see schwab_client.position_side_split_weights, which weights by each
+      side's live option value rather than a flat 50/50), or 50/50 if
+      side_weights is omitted or has no entry for this position -- since
+      TradeSteward only reports these figures per whole position, not per
+      leg, some split is always an approximation.
 
     Within a side, a position's $ is further split across its legs there in
     proportion to each leg's short quantity (matters for e.g. an unbalanced
@@ -353,12 +357,13 @@ def aggregate_short_strikes(positions: list[dict]) -> list[dict]:
     strike), each with combined qty and summed $ from every position sharing
     that strike.
     """
+    side_weights = side_weights or {}
     rows: dict[tuple[str, float], dict] = {}
     for pos in positions:
         sides = short_strikes_by_side(pos)
         has_call = bool(sides["C"])
         has_put = bool(sides["P"])
-        share = 0.5 if (has_call and has_put) else 1.0
+        weights = side_weights.get(pos.get("serial")) if (has_call and has_put) else None
 
         captured = max(parse_money(pos.get("profit_dollars", "0") or "0"), 0.0)
 
@@ -387,6 +392,12 @@ def aggregate_short_strikes(positions: list[dict]) -> list[dict]:
         for side, legs in sides.items():
             if not legs:
                 continue
+            if not (has_call and has_put):
+                share = 1.0
+            elif weights and side in weights:
+                share = weights[side]
+            else:
+                share = 0.5
             side_qty = sum(-leg["qty"] for leg in legs)  # short qty as positive contracts
             for leg in legs:
                 key = (side, leg["strike"])
