@@ -61,6 +61,7 @@ _PCT_STOP_RE = re.compile(r"^([\d.]+)%\s+Loss$", re.I)
 _POINTS_STOP_RE = re.compile(r"^([\d.]+)\s+Points?\s+ITM$", re.I)
 _STOP_AT_RE = re.compile(r"Stop at \$([\d.,]+)", re.I)
 _OPEN_CREDIT_RE = re.compile(r"Open:.*?\$([\d.,]+)\s+Credit", re.I | re.S)
+_CURRENT_PRICE_RE = re.compile(r"Current:.*?\$([\d.,]+)\s+(Credit|Debit)", re.I | re.S)
 
 ENDPOINT = "https://www.tradesteward.com/ajax"
 DASHBOARD_URL = "https://www.tradesteward.com/trading/"  # logged-in dashboard (redirects to login if signed out)
@@ -156,6 +157,8 @@ def extract_positions(payload: dict) -> list[dict]:
                 "max_profit": dollars.get("maxProfit", ""),
                 "max_loss": dollars.get("maxLoss", ""),
                 "stop_closest_strike": stop.get("closestStrike", ""),
+                "stop_type": stop.get("stopType", ""),
+                "trail_stop": stop.get("trailStop"),  # live combined stop price (float) if a trail is active, else False
             }
         )
     return positions
@@ -170,32 +173,58 @@ def parse_leg(leg: str) -> dict | None:
     return {"qty": int(m.group(1)), "strike": float(m.group(2)), "type": m.group(3)}
 
 
-def resolve_stop_barrier(position: dict, leg: dict) -> dict | None:
-    """Turn a position's stop_target into a concrete barrier for one of its
-    short legs, in whichever unit that stop type is naturally defined:
+def current_combined_price(position: dict) -> float | None:
+    """The position's current combined value to close, in the same
+    per-contract $ units as its entry credit -- positive if it would still
+    cost a debit to close (the normal case as a credit spread decays
+    against you), i.e. reads 'Current: $X Debit' as +X. A position that's
+    swung to a net credit to close (deep in profit) reads 'Current: $X
+    Credit' as -X, consistent with entry_credit - current giving the same
+    signed profit-per-contract that profit_dollars / (qty*100) does.
+    """
+    m = _CURRENT_PRICE_RE.search(position.get("open_price", "") or "")
+    if not m:
+        return None
+    value = float(m.group(1).replace(",", ""))
+    return value if m.group(2).lower() == "debit" else -value
 
-    - "$X Loss"    -> {'kind': 'option_price', 'price': entry + X}. Uses
-      TradeSteward's own computed trigger price from stop_closest_strike
-      ("...; Stop at $Y") directly when available (authoritative, no
-      re-derivation), falling back to entry_credit + X if that field is
-      ever missing.
-    - "X% Loss"    -> {'kind': 'option_price', 'price': entry * (1 + X/100)}.
-      Derived (TradeSteward doesn't expose a fixed $ target for this type,
-      only a live "% Loss so far" reading) -- there's nothing for us to
-      cross-check this against except that live reading, which is a
-      snapshot of current distance, not a stored target.
-    - "N Points ITM" -> {'kind': 'spot_price', 'price': strike -+ N}. This
-      stop type's trigger already *is* a fixed SPX level (how far the
-      strike is breached), so no option pricing is involved at all.
+
+def resolve_stop_barrier(position: dict, leg: dict) -> dict | None:
+    """Turn a position's stop_target into a concrete barrier, in whichever
+    unit and scope that stop type is naturally defined:
+
+    - "$X Loss" / "X% Loss" -> {'kind': 'option_price', 'scope': 'position',
+      'price': ...}. These stop types are evaluated against the position's
+      *combined* current value (summed across every leg -- TradeSteward
+      reports one entry credit and one current price for the whole
+      multi-leg trade, not one each per leg), so the returned price is a
+      combined-position threshold, not a per-leg one. Uses the live
+      trail_stop price directly when a trailing stop is active (an
+      authoritative, already-adjusted trigger); otherwise derives a static
+      threshold from the combined entry credit ("$X Loss" adds X, "X% Loss"
+      multiplies by 1+X/100) -- for "$X Loss" specifically, prefers
+      TradeSteward's own computed trigger from stop_closest_strike
+      ("...; Stop at $Y") when available, since that reflects any
+      rounding/adjustment on their side rather than re-deriving it.
+    - "N Points ITM" -> {'kind': 'spot_price', 'scope': 'leg', 'price':
+      strike -+ N}. This stop type's trigger already *is* a fixed SPX
+      level tied to one specific short strike, so it stays per-leg.
     - "None" / unrecognized -> None (no stop set, or a format we don't
       parse yet).
 
-    entry credit comes from open_price ("Open: $X Credit..."); a position
-    missing that (shouldn't happen for a short leg) also returns None.
+    Callers must branch on 'scope': a 'position' barrier's give-back needs
+    to be computed once for the whole position (from current_combined_price)
+    and then split across short legs by qty, not compared against each
+    leg's own option price individually -- comparing a combined threshold
+    against one leg's small individual price wildly overstates risk.
     """
     target = (position.get("stop_target") or "").strip()
     if not target or target.lower() == "none":
         return None
+
+    trail_stop = position.get("trail_stop")
+    if isinstance(trail_stop, (int, float)) and trail_stop is not False:
+        return {"kind": "option_price", "scope": "position", "price": float(trail_stop)}
 
     m = _DOLLAR_STOP_RE.match(target)
     if m:
@@ -203,11 +232,11 @@ def resolve_stop_barrier(position: dict, leg: dict) -> dict | None:
         closest = position.get("stop_closest_strike", "") or ""
         stop_at = _STOP_AT_RE.search(closest)
         if stop_at:
-            return {"kind": "option_price", "price": float(stop_at.group(1).replace(",", ""))}
+            return {"kind": "option_price", "scope": "position", "price": float(stop_at.group(1).replace(",", ""))}
         entry = _OPEN_CREDIT_RE.search(position.get("open_price", "") or "")
         if not entry:
             return None
-        return {"kind": "option_price", "price": float(entry.group(1).replace(",", "")) + amount}
+        return {"kind": "option_price", "scope": "position", "price": float(entry.group(1).replace(",", "")) + amount}
 
     m = _PCT_STOP_RE.match(target)
     if m:
@@ -216,16 +245,50 @@ def resolve_stop_barrier(position: dict, leg: dict) -> dict | None:
         if not entry:
             return None
         entry_credit = float(entry.group(1).replace(",", ""))
-        return {"kind": "option_price", "price": entry_credit * (1 + pct / 100)}
+        return {"kind": "option_price", "scope": "position", "price": entry_credit * (1 + pct / 100)}
 
     m = _POINTS_STOP_RE.match(target)
     if m:
         points = float(m.group(1))
         # A short call is breached (ITM) above its strike; a short put below.
         sign = 1 if leg["type"] == "C" else -1
-        return {"kind": "spot_price", "price": leg["strike"] + sign * points}
+        return {"kind": "spot_price", "scope": "leg", "price": leg["strike"] + sign * points}
 
     return None
+
+
+def position_give_back(position: dict) -> float | None:
+    """The $ amount this position would give back from its current value if
+    its stop triggers right now -- for a 'position'-scope barrier (see
+    resolve_stop_barrier), computed once from the combined current price
+    and combined stop threshold, not per-leg. Returns None if the stop
+    can't be resolved to a position-scope barrier (no stop, a 'Points ITM"
+    leg-scope stop, or missing current-price data) -- 'Points ITM'
+    positions' risk is handled separately, per short leg, by callers.
+
+    Uses the same short-leg count that resolve_stop_barrier's caller would
+    use to get qty, but this function only needs one representative short
+    leg to resolve the barrier (any short leg gives the same combined
+    barrier), then multiplies by the position's contract multiplier
+    (already baked into current_combined_price's per-contract units) and
+    the total short qty across all short legs, since the combined P&L
+    scales with the position's full size, not one leg's qty alone.
+    """
+    sides = short_strikes_by_side(position)
+    all_short_legs = sides["C"] + sides["P"]
+    if not all_short_legs:
+        return None
+    barrier = resolve_stop_barrier(position, all_short_legs[0])
+    if not barrier or barrier["scope"] != "position":
+        return None
+    current = current_combined_price(position)
+    if current is None:
+        return None
+    # qty is the same magnitude on every short leg of a standard vertical/IC
+    # (that's how these bots are built), so any one leg's qty represents the
+    # position's size for this combined calculation.
+    qty = abs(all_short_legs[0]["qty"])
+    return max(barrier["price"] - current, 0.0) * qty * 100
 
 
 def short_strikes_by_side(position: dict) -> dict[str, list[dict]]:
@@ -273,9 +336,18 @@ def aggregate_short_strikes(positions: list[dict]) -> list[dict]:
         share = 0.5 if (has_call and has_put) else 1.0
 
         max_profit = abs(parse_money(pos.get("max_profit", "0") or "0"))
-        at_risk = abs(parse_money(pos.get("max_loss", "0") or "0"))
         captured = max(parse_money(pos.get("profit_dollars", "0") or "0"), 0.0)
         remaining = max_profit - captured
+
+        # Real $ given back from today's current value if the stop
+        # triggers, not the static entry-based max_loss ceiling -- a
+        # position sitting on a lot of banked profit has a much bigger
+        # give-back than its original defined risk once a stop is anywhere
+        # near its current price. Falls back to max_loss for stop types
+        # that don't resolve to a position-scope give-back (e.g. "Points
+        # ITM", which is leg-specific, or no stop at all).
+        give_back = position_give_back(pos)
+        at_risk = give_back if give_back is not None else abs(parse_money(pos.get("max_loss", "0") or "0"))
 
         bot_name_upper = (pos.get("bot_name") or "").upper()
         is_bic = "BIC" in bot_name_upper

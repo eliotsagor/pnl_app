@@ -318,24 +318,13 @@ def option_price_barrier_probability(spot: float, strike: float, side: str, cont
     return touch_probability(spot, implied_barrier, iv / 100, years)
 
 
-def _is_combined_stop_position(position: dict) -> bool:
-    """True for a position whose stop is managed as one unit across both
-    sides (a manually-triggered "Elmo" -- marked by "PAIC" in the bot name)
-    rather than two independently-stopped verticals.
-
-    "BIC" bots always stop each side separately even on the rare occasion
-    they open as one two-sided position object, so that name takes explicit
-    priority over "PAIC" if a name somehow contained both. Every other bot
-    in practice (BIC-style "CALL only"/"PUT only" bots) already opens as a
-    separate single-sided position per side anyway, so this only matters
-    for the rare 4-leg both-sides-in-one-position case."""
-    name = (position.get("bot_name") or "").upper()
-    if "BIC" in name:
-        return False
-    return "PAIC" in name
-
-
 def _leg_stop_probability(spot: float, contracts: dict, pos: dict, leg: dict, barrier: dict) -> float | None:
+    """Probability this one leg's own stop triggers -- only meaningful for
+    a 'leg'-scope barrier (Points ITM), which is genuinely tied to one
+    strike. Callers must not call this for a 'position'-scope barrier
+    ($/% Loss, or a live trail) -- see position_stop_probability instead,
+    since those stops are evaluated against the position's combined value,
+    not any single leg's own price."""
     key = (leg["strike"], leg["type"])
     if barrier["kind"] == "spot_price":
         # Use the specific contract's own IV if we have it, else skip rather
@@ -351,21 +340,92 @@ def _leg_stop_probability(spot: float, contracts: dict, pos: dict, leg: dict, ba
     return option_price_barrier_probability(spot, leg["strike"], leg["type"], contract, barrier["price"])
 
 
+def position_side_stop_probability(spot: float, contracts: dict, pos: dict, side: str) -> float | None:
+    """For a 'position'-scope stop ($X Loss, X% Loss, or a live trail --
+    see resolve_stop_barrier) on a two-sided combined position (an Elmo,
+    which stops like a short strangle: one combined $ threshold, triggered
+    by a big move in *either* direction), this estimates the probability
+    that *this side's* move is the one that pushes the combined position to
+    its stop -- using this side's own short leg(s) delta/IV against the
+    combined threshold and combined current price, as if this side alone
+    had to cover the full remaining distance.
+
+    This is the per-strike attribution the strikes table needs (how much
+    of the combined risk to show against each short strike), not a single
+    "did the position stop at all" figure -- for that, combine both sides'
+    results via 1 - (1-p_call)(1-p_put), same pattern used elsewhere for
+    "either side triggers." Ignores that a mix of both sides moving
+    partway could also reach the threshold -- an approximation, but a
+    reasonable one for attributing risk per strike.
+
+    For a one-sided position (a normal vertical, whether independently- or
+    combined-stopped), this is just that one side's own probability -- the
+    "either direction" concern doesn't apply, so it reduces to the same
+    single-leg calculation as before.
+    """
+    import tradesteward_fetch as tsf
+
+    sides = tsf.short_strikes_by_side(pos)
+    side_legs = sides.get(side, [])
+    if not side_legs:
+        return None
+    barrier = tsf.resolve_stop_barrier(pos, side_legs[0])
+    if not barrier or barrier["scope"] != "position":
+        return None
+    current = tsf.current_combined_price(pos)
+    if current is None:
+        return None
+
+    side_delta = 0.0
+    iv_weighted = 0.0
+    iv_weight = 0.0
+    for leg in side_legs:
+        contract = contracts.get((leg["strike"], leg["type"]))
+        if not contract:
+            continue
+        delta = contract.get("delta")
+        iv = contract.get("volatility")
+        qty = abs(leg["qty"])
+        if delta is not None:
+            side_delta += abs(delta) * qty
+        if iv:
+            iv_weighted += iv * qty
+            iv_weight += qty
+    if side_delta <= 0 or iv_weight <= 0:
+        return None
+    avg_iv = iv_weighted / iv_weight
+
+    price_move_needed = barrier["price"] - current
+    spot_points_needed = price_move_needed / side_delta
+    # A short call's combined-price contribution rises as spot rises; a
+    # short put's rises as spot falls -- same convention as
+    # option_price_barrier_probability's single-leg case.
+    direction = 1 if side == "C" else -1
+    implied_barrier = spot + direction * spot_points_needed
+    years = _time_to_expiry_years()
+    return touch_probability(spot, implied_barrier, avg_iv / 100, years)
+
+
 def stop_probabilities_by_strike(positions: list[dict]) -> dict:
     """{(strike, 'C'|'P'): probability} -- the probability each short
     strike's stop actually triggers before today's close. Where a strike has
     multiple legs (several positions sharing it), returns their qty-weighted
     average probability.
 
-    Most bots (BIC-style "CALL only"/"PUT only") already open as a separate
-    single-sided position per side, so their two legs' stops are genuinely
-    independent and each gets its own probability. A combined-stop position
-    (an "Elmo" -- see _is_combined_stop_position) manages both sides as one
-    unit, so both its strikes get the same combined probability: the chance
-    *either* side triggers, P = 1 - (1-p_call)(1-p_put), treating the two
-    touch events as roughly independent (a simplification -- SPX obviously
-    can't be both far up and far down at once -- but a reasonable estimate
-    without modeling their joint distribution).
+    Branches on each position's resolved stop barrier scope (see
+    resolve_stop_barrier):
+
+    - 'leg' scope ("N Points ITM"): genuinely tied to one strike --
+      _leg_stop_probability as before.
+    - 'position' scope ($X Loss, X% Loss, a live trail): evaluated against
+      the position's *combined* value, not any single leg's own price. For
+      a one-sided position (a normal vertical) this reduces to that one
+      side's own probability. For a two-sided combined-stop position (an
+      Elmo, which stops like a short strangle -- either side's move can
+      push the combined price to the stop), position_side_stop_probability
+      gives each side's own share of that risk, which is what the strikes
+      table needs for per-strike attribution -- not a single merged
+      "did the position stop at all" figure.
 
     Skips legs with no parseable stop (resolve_stop_barrier returned None)
     or missing chain data for that specific contract -- callers should treat
@@ -382,41 +442,30 @@ def stop_probabilities_by_strike(positions: list[dict]) -> dict:
     weighted: dict[tuple[float, str], list[tuple[float, float]]] = {}  # key -> [(prob, weight), ...]
     for pos in positions:
         sides = tsf.short_strikes_by_side(pos)
-        combined = _is_combined_stop_position(pos) and sides["C"] and sides["P"]
-
-        if combined:
-            # One stop_target shared by both sides -- compute each side's own
-            # probability against it, then fold them into a single combined
-            # probability applied to every short leg in this position.
-            leg_probs = []
-            for side_legs in sides.values():
-                for leg in side_legs:
-                    barrier = tsf.resolve_stop_barrier(pos, leg)
-                    if not barrier:
-                        continue
-                    p = _leg_stop_probability(spot, contracts, pos, leg, barrier)
-                    if p is not None:
-                        leg_probs.append(p)
-            if not leg_probs:
-                continue
-            combined_prob = 1.0
-            for p in leg_probs:
-                combined_prob *= 1 - p
-            combined_prob = 1 - combined_prob
-            for side_legs in sides.values():
-                for leg in side_legs:
-                    key = (leg["strike"], leg["type"])
-                    weighted.setdefault(key, []).append((combined_prob, -leg["qty"]))
+        all_short_legs = sides["C"] + sides["P"]
+        if not all_short_legs:
+            continue
+        barrier = tsf.resolve_stop_barrier(pos, all_short_legs[0])
+        if not barrier:
             continue
 
-        for leg_str in pos.get("legs", []):
-            leg = tsf.parse_leg(leg_str)
-            if not leg or leg["qty"] >= 0:
-                continue  # only short legs carry a stop that closes *this* position
-            barrier = tsf.resolve_stop_barrier(pos, leg)
-            if not barrier:
+        if barrier["scope"] == "position":
+            for side, side_legs in sides.items():
+                if not side_legs:
+                    continue
+                p = position_side_stop_probability(spot, contracts, pos, side)
+                if p is None:
+                    continue
+                for leg in side_legs:
+                    key = (leg["strike"], leg["type"])
+                    weighted.setdefault(key, []).append((p, -leg["qty"]))
+            continue
+
+        for leg in all_short_legs:
+            leg_barrier = tsf.resolve_stop_barrier(pos, leg)
+            if not leg_barrier:
                 continue
-            p = _leg_stop_probability(spot, contracts, pos, leg, barrier)
+            p = _leg_stop_probability(spot, contracts, pos, leg, leg_barrier)
             if p is not None:
                 key = (leg["strike"], leg["type"])
                 weighted.setdefault(key, []).append((p, -leg["qty"]))
@@ -469,14 +518,19 @@ def position_expected_values(positions: list[dict]) -> dict:
     out = {}
     for pos in positions:
         sides = tsf.short_strikes_by_side(pos)
-        combined = _is_combined_stop_position(pos) and sides["C"] and sides["P"]
-
         all_legs = [leg for side_legs in sides.values() for leg in side_legs]
+        if not all_legs:
+            continue
         leg_probs = [stop_probs.get((leg["strike"], leg["type"])) for leg in all_legs]
         leg_probs = [p for p in leg_probs if p is not None]
         if not leg_probs:
             continue
-        p_stop = leg_probs[0] if combined else max(leg_probs)
+        # A two-sided position's two sides carry the same per-side risk-share
+        # probability already (see stop_probabilities_by_strike), not
+        # independent events, so the position's own overall stop chance is
+        # the higher of the two -- taking the max avoids double counting the
+        # same combined stop as if call and put were separate risks.
+        p_stop = max(leg_probs)
 
         # This position's own net delta/gamma -- unlike net_greeks (book-wide),
         # this is scoped to just this position's legs (both short and long,
@@ -496,52 +550,50 @@ def position_expected_values(positions: list[dict]) -> dict:
             pos_gamma += leg_full["qty"] * c["gamma"] * 100
 
         spot = chain["spot"]
-        total_gain = 0.0
-        total_loss = 0.0
-        priced_any = False
-        for leg in all_legs:
-            barrier = tsf.resolve_stop_barrier(pos, leg)
-            contract = contracts.get((leg["strike"], leg["type"]))
-            current = contract.get("mark") if contract else None
-            if current is None or barrier is None:
-                continue
+        barrier = tsf.resolve_stop_barrier(pos, all_legs[0])
+        total_gain = None
+        total_loss = None
 
-            if barrier["kind"] == "option_price":
-                stop_price = barrier["price"]
-            else:  # spot_price ("N Points ITM") -- convert via this leg's
-                # own current delta (a local-linear step). Tried repricing
-                # via Black-Scholes instead, but it diverges badly from
-                # Schwab's own live 0DTE prices this close to expiry (real
-                # 0DTE options don't price like vanilla BS at this range)
-                # -- the delta-anchored estimate, while it has its own known
-                # weakness (delta instability in the very final minutes),
-                # is at least anchored to a real quoted greek rather than a
-                # theoretical model that's demonstrably wrong here.
+        if barrier and barrier["scope"] == "position":
+            # $/% Loss or a live trail -- evaluated against the position's
+            # combined value, not any single leg's own option price (see
+            # resolve_stop_barrier / position_give_back). gain_from_here is
+            # the combined current value decaying to worthless; loss_from_here
+            # is the same combined give-back used for at_risk in
+            # aggregate_short_strikes.
+            current_combined = tsf.current_combined_price(pos)
+            qty = abs(all_legs[0]["qty"])
+            if current_combined is not None:
+                total_gain = current_combined * qty * 100
+                total_loss = tsf.position_give_back(pos)
+        else:
+            # "N Points ITM" -- genuinely per-leg, via that leg's own chain
+            # contract (a local-linear delta step; see the module docstring
+            # note on why this isn't repriced with Black-Scholes instead).
+            total_gain = 0.0
+            total_loss = 0.0
+            priced_any = False
+            for leg in all_legs:
+                leg_barrier = tsf.resolve_stop_barrier(pos, leg)
+                contract = contracts.get((leg["strike"], leg["type"]))
+                current = contract.get("mark") if contract else None
+                if current is None or leg_barrier is None:
+                    continue
                 delta = contract.get("delta")
                 if not delta:
                     continue
                 direction = 1 if leg["type"] == "C" else -1
-                spot_points_to_stop = (barrier["price"] - spot) * direction
+                spot_points_to_stop = (leg_barrier["price"] - spot) * direction
                 stop_price = current + abs(delta) * spot_points_to_stop
+                qty = -leg["qty"]
+                total_gain += current * qty * 100
+                total_loss += max(stop_price - current, 0.0) * qty * 100
+                priced_any = True
+            if not priced_any:
+                total_gain = total_loss = None
 
-            qty = -leg["qty"]  # positive short contract count
-            total_gain += current * qty * 100
-            total_loss += max(stop_price - current, 0.0) * qty * 100
-            priced_any = True
-        if not priced_any:
+        if total_gain is None or total_loss is None:
             continue
-
-        # A defined-risk spread's long leg caps the real max loss (and its
-        # short leg's own premium caps the real max gain) below what a
-        # naive per-leg calc can imply -- clamp both against TradeSteward's
-        # own stated ceilings for this position, which already account for
-        # the full spread structure.
-        max_profit = abs(tsf.parse_money(pos.get("max_profit", "0") or "0"))
-        captured = max(tsf.parse_money(pos.get("profit_dollars", "0") or "0"), 0.0)
-        remaining_ceiling = max(max_profit - captured, 0.0)
-        at_risk_ceiling = abs(tsf.parse_money(pos.get("max_loss", "0") or "0"))
-        total_gain = min(total_gain, remaining_ceiling) if remaining_ceiling else total_gain
-        total_loss = min(total_loss, at_risk_ceiling) if at_risk_ceiling else total_loss
 
         ev = (1 - p_stop) * total_gain - p_stop * total_loss
         out[pos.get("serial")] = {

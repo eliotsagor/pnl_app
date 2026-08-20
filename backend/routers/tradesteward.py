@@ -88,6 +88,14 @@ def _run_fetch_risk(job_id: str):
             name = (pos.get("bot_name") or "").upper()
             pos["is_bic"] = "BIC" in name
             pos["is_elmo"] = "PAIC" in name
+            # Real $ given back from today's value if the stop triggers
+            # (see position_give_back), not the static entry-based max_loss
+            # -- exposed on the position itself so the frontend's client-side
+            # strike re-aggregation (for the Elmo/BIC/Other and per-bot
+            # filters) can split it across legs without duplicating this
+            # scope-aware logic in TypeScript.
+            give_back = tsf.position_give_back(pos)
+            pos["at_risk"] = give_back if give_back is not None else abs(tsf.parse_money(pos.get("max_loss", "0") or "0"))
         strikes = tsf.aggregate_short_strikes(positions)
         try:
             quote = quotes.spx_quote()
