@@ -130,7 +130,6 @@ export default function RiskDashboardPage() {
   const hasEm = hasQuote && em?.expected_move != null;
   const emUp = hasEm ? quote!.price! + em!.expected_move! : null;
   const emDown = hasEm ? quote!.price! - em!.expected_move! : null;
-  const emBand = hasEm ? { low: emDown!, high: emUp! } : null;
 
   const allPositions = data?.positions ?? [];
   const filteredPositions = allPositions.filter((p) => {
@@ -140,7 +139,7 @@ export default function RiskDashboardPage() {
     if (isOther(p) && !showOther) return false;
     return true;
   });
-  const filteredStrikes = aggregateShortStrikes(filteredPositions, emBand);
+  const filteredStrikes = aggregateShortStrikes(filteredPositions);
   const filteredGreeks = netGreeksFor(filteredPositions);
 
   const checkedCount = allPositions.filter((p) => !uncheckedNames.has(p.bot_name)).length;
@@ -163,7 +162,7 @@ export default function RiskDashboardPage() {
   const calls = filteredStrikes.filter((r) => r.type === "C").sort((a, b) => b.strike - a.strike);
   const puts = filteredStrikes.filter((r) => r.type === "P").sort((a, b) => b.strike - a.strike);
 
-  const sum = (rows: StrikeRow[], key: "captured" | "remaining" | "at_risk" | "at_risk_in_em") =>
+  const sum = (rows: StrikeRow[], key: "captured" | "remaining" | "at_risk" | "ev") =>
     rows.reduce((s, r) => s + (r[key] ?? 0), 0);
 
   const changeColor = quote?.change != null ? (quote.change >= 0 ? COLOR_GOOD : COLOR_CRITICAL) : "text.secondary";
@@ -231,8 +230,8 @@ export default function RiskDashboardPage() {
       <TableCell align="right" sx={{ color: COLOR_CRITICAL, fontVariantNumeric: "tabular-nums" }}>
         {fmtMoney(r.at_risk)}
       </TableCell>
-      <TableCell align="right" sx={{ color: `${COLOR_CRITICAL}cc`, fontVariantNumeric: "tabular-nums" }}>
-        {r.at_risk_in_em != null ? fmtMoney(r.at_risk_in_em) : "—"}
+      <TableCell align="right" sx={{ color: r.ev != null ? evColor(r.ev) : "text.secondary", fontVariantNumeric: "tabular-nums" }}>
+        {r.ev != null ? `${r.ev >= 0 ? "+" : "-"}$${Math.round(Math.abs(r.ev)).toLocaleString()}` : "—"}
       </TableCell>
     </TableRow>
   );
@@ -408,7 +407,7 @@ export default function RiskDashboardPage() {
                   At risk
                 </TableCell>
                 <TableCell align="right" sx={{ fontWeight: 600 }}>
-                  At risk in EM
+                  EV
                 </TableCell>
               </TableRow>
             </TableHead>
@@ -481,10 +480,10 @@ export default function RiskDashboardPage() {
             </Box>
             <Box sx={{ display: "flex", justifyContent: "space-between" }}>
               <Typography variant="body2" color="text.secondary">
-                at risk in EM
+                EV
               </Typography>
-              <Typography variant="body2" sx={{ color: `${COLOR_CRITICAL}cc` }}>
-                {fmtMoney(sum(calls, "at_risk_in_em"))}
+              <Typography variant="body2" sx={{ color: evColor(sum(calls, "ev")) }}>
+                {sum(calls, "ev") >= 0 ? "+" : "-"}${Math.round(Math.abs(sum(calls, "ev"))).toLocaleString()}
               </Typography>
             </Box>
           </Box>
@@ -518,10 +517,10 @@ export default function RiskDashboardPage() {
             </Box>
             <Box sx={{ display: "flex", justifyContent: "space-between" }}>
               <Typography variant="body2" color="text.secondary">
-                at risk in EM
+                EV
               </Typography>
-              <Typography variant="body2" sx={{ color: `${COLOR_CRITICAL}cc` }}>
-                {fmtMoney(sum(puts, "at_risk_in_em"))}
+              <Typography variant="body2" sx={{ color: evColor(sum(puts, "ev")) }}>
+                {sum(puts, "ev") >= 0 ? "+" : "-"}${Math.round(Math.abs(sum(puts, "ev"))).toLocaleString()}
               </Typography>
             </Box>
           </Box>

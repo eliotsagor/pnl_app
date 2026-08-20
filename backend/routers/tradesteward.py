@@ -126,32 +126,19 @@ def _run_fetch_risk(job_id: str):
             expected_move = schwab_client.spx_expected_move_remaining()
         except Exception:
             expected_move = {}
-        # EM band for at_risk_in_em below: at_risk itself is never
-        # probability-weighted (it's a hard $ figure, full stop) --
-        # at_risk_in_em is just that same figure scoped to whether the
-        # strike sits within today's expected move, not a likelihood
-        # discount (Stop% already shows likelihood separately). Note EM
-        # itself is the market's ~1-standard-deviation move by expiration
-        # (from the ATM straddle), a narrower notion than "touch
-        # probability" (odds of reaching a level at any point intraday),
-        # so a strike just outside EM can still have real intraday risk
-        # this doesn't capture.
-        em_low = em_high = None
-        spot_px = quote.get("price")
-        em_amount = expected_move.get("expected_move")
-        if spot_px is not None and em_amount is not None:
-            em_low = spot_px - em_amount
-            em_high = spot_px + em_amount
-        for row in strikes:
-            in_em = em_low is not None and em_low <= row["strike"] <= em_high
-            row["at_risk_in_em"] = row["at_risk"] if in_em else 0.0
-
         try:
             stop_probs = schwab_client.stop_probabilities_by_strike(positions)
             for row in strikes:
                 prob = stop_probs.get((row["strike"], row["type"]))
                 if prob is not None:
                     row["stop_probability"] = prob
+                    # Same model as the EV-of-holding table (position_expected_values),
+                    # applied to this strike's own already-split remaining/at_risk
+                    # rather than a whole position's: (1-p_stop) x what's left if it
+                    # decays to worthless, minus p_stop x the real give-back to the
+                    # stop. "not stopped" is realistic decay, not the full remaining
+                    # ceiling, so this doesn't need a separate P(capture) estimate.
+                    row["ev"] = (1 - prob) * row["remaining"] - prob * row["at_risk"]
         except Exception:
             pass  # stop-probability is best-effort; strikes still render without it
         try:
