@@ -50,7 +50,13 @@ export function aggregateShortStrikes(positions: Position[]): StrikeRow[] {
     const share = hasCall && hasPut ? 0.5 : 1.0;
 
     const maxProfit = Math.abs(parseMoney(pos.max_profit));
-    const atRisk = Math.abs(parseMoney(pos.max_loss));
+    // Real $ given back from today's value if the stop triggers (computed
+    // server-side by position_give_back, exposed as pos.at_risk), not the
+    // static entry-based max_loss -- a position sitting on banked profit
+    // has a much bigger give-back than its original defined risk. Falls
+    // back to max_loss if the server didn't attach it (e.g. an older
+    // cached result).
+    const atRisk = pos.at_risk != null ? pos.at_risk : Math.abs(parseMoney(pos.max_loss));
     const captured = Math.max(parseMoney(pos.profit_dollars), 0);
     const remaining = maxProfit - captured;
 
