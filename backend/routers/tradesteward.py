@@ -103,7 +103,21 @@ def _run_fetch_risk(job_id: str):
             # re-aggregation, same reasoning as at_risk above.
             remaining_value = tsf.position_remaining_value(pos)
             pos["remaining"] = remaining_value if remaining_value is not None else 0.0
-        strikes = tsf.aggregate_short_strikes(positions)
+
+        # Weight how much of a two-sided position's captured/remaining/at_risk
+        # goes to each strike by each side's own live option value, instead
+        # of a flat 50/50 -- TradeSteward only reports one combined $ figure
+        # per position, but we do have each leg's own current price.
+        try:
+            chain = schwab_client.option_chain_lookup()
+            side_weights = schwab_client.position_side_split_weights(positions, chain.get("contracts", {}))
+            for pos in positions:
+                w = side_weights.get(pos.get("serial"))
+                if w is not None:
+                    pos["side_split"] = w
+        except Exception:
+            side_weights = {}
+        strikes = tsf.aggregate_short_strikes(positions, side_weights)
         try:
             quote = quotes.spx_quote()
         except Exception:
@@ -112,14 +126,11 @@ def _run_fetch_risk(job_id: str):
             expected_move = schwab_client.spx_expected_move_remaining()
         except Exception:
             expected_move = {}
-        # EM band for gating at_risk_in_em below -- stop_probability (used
-        # for the Stop% column) is about the *combined option price*
-        # reaching its stop, which can happen via IV/theta drift even if
-        # spot never approaches the strike, so it's not itself a "was this
-        # strike in play today" signal. at_risk_in_em specifically means
-        # risk realistically in play *within the expected move*, so it's
-        # zeroed for any strike outside that band regardless of what
-        # stop_probability says -- a coarse but legible gate; note EM
+        # EM band for at_risk_in_em below: at_risk itself is never
+        # probability-weighted (it's a hard $ figure, full stop) --
+        # at_risk_in_em is just that same figure scoped to whether the
+        # strike sits within today's expected move, not a likelihood
+        # discount (Stop% already shows likelihood separately). Note EM
         # itself is the market's ~1-standard-deviation move by expiration
         # (from the ATM straddle), a narrower notion than "touch
         # probability" (odds of reaching a level at any point intraday),
@@ -131,6 +142,9 @@ def _run_fetch_risk(job_id: str):
         if spot_px is not None and em_amount is not None:
             em_low = spot_px - em_amount
             em_high = spot_px + em_amount
+        for row in strikes:
+            in_em = em_low is not None and em_low <= row["strike"] <= em_high
+            row["at_risk_in_em"] = row["at_risk"] if in_em else 0.0
 
         try:
             stop_probs = schwab_client.stop_probabilities_by_strike(positions)
@@ -138,12 +152,6 @@ def _run_fetch_risk(job_id: str):
                 prob = stop_probs.get((row["strike"], row["type"]))
                 if prob is not None:
                     row["stop_probability"] = prob
-                    # Portion of this strike's stated max loss that's
-                    # actually likely to happen today -- weighting by stop
-                    # probability turns a static worst-case figure into "how
-                    # much of this risk is realistically in play right now."
-                    in_em = em_low is not None and em_low <= row["strike"] <= em_high
-                    row["at_risk_in_em"] = (row["at_risk"] * prob) if in_em else 0.0
         except Exception:
             pass  # stop-probability is best-effort; strikes still render without it
         try:

@@ -57,7 +57,6 @@ export function aggregateShortStrikes(
     const sides = shortStrikesBySide(pos);
     const hasCall = sides.C.length > 0;
     const hasPut = sides.P.length > 0;
-    const share = hasCall && hasPut ? 0.5 : 1.0;
 
     // Real $ given back from today's value if the stop triggers (computed
     // server-side by position_give_back, exposed as pos.at_risk), not the
@@ -77,6 +76,10 @@ export function aggregateShortStrikes(
     for (const side of ["C", "P"] as const) {
       const legs = sides[side];
       if (legs.length === 0) continue;
+      // Weighted by each side's own live option value (server-computed,
+      // exposed as pos.side_split), not a flat 50/50 -- falls back to 0.5
+      // if the server didn't attach it (e.g. an older cached result).
+      const share = !hasCall || !hasPut ? 1.0 : (pos.side_split?.[side] ?? 0.5);
       const sideQty = legs.reduce((s, l) => s + -l.qty, 0);
       for (const leg of legs) {
         const key = `${side}${leg.strike}`;
@@ -121,9 +124,12 @@ export function aggregateShortStrikes(
       const { probWeighted, probWeight, ...row } = r;
       if (probWeight > 0) {
         row.stop_probability = probWeighted / probWeight;
-        const inEm = !emBand || (row.strike >= emBand.low && row.strike <= emBand.high);
-        row.at_risk_in_em = inEm ? row.at_risk * row.stop_probability : 0;
       }
+      // at_risk is never probability-weighted -- at_risk_in_em is the same
+      // hard $ figure, just scoped to whether the strike sits within
+      // today's expected move (Stop% already shows likelihood separately).
+      const inEm = !emBand || (row.strike >= emBand.low && row.strike <= emBand.high);
+      row.at_risk_in_em = inEm ? row.at_risk : 0;
       return row;
     })
     .sort((a, b) => (a.type === "C" ? 1 : 0) - (b.type === "C" ? 1 : 0) || a.strike - b.strike);

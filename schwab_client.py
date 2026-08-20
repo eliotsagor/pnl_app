@@ -286,6 +286,52 @@ def option_chain_lookup(symbol: str = "$SPX") -> dict:
     return out
 
 
+def position_side_split_weights(positions: list[dict], contracts: dict) -> dict:
+    """{serial: {'C': weight, 'P': weight}} -- for each two-sided position
+    (short legs on both call and put side, e.g. an iron condor), how much
+    of its combined captured/remaining/at_risk to attribute to each side,
+    weighted by that side's own live option value (mark * qty) rather than
+    a flat 50/50 split. TradeSteward only reports one combined $ figure for
+    the whole position, but we do have each individual leg's own current
+    price from the Schwab chain, so a side trading at a much higher price
+    right now (i.e. carrying more of the position's current value) gets
+    more of the combined $ attributed to it.
+
+    Falls back to a 50/50 split (weights 0.5/0.5) for a position where
+    chain data is missing for one or both sides -- better to degrade to
+    the old behavior than attribute risk using a partial/skewed weight.
+    One-sided positions aren't included (aggregate_short_strikes already
+    gives a one-sided position its full share automatically).
+    """
+    import tradesteward_fetch as tsf
+
+    out = {}
+    for pos in positions:
+        sides = tsf.short_strikes_by_side(pos)
+        if not (sides["C"] and sides["P"]):
+            continue
+
+        side_values = {}
+        complete = True
+        for side, legs in sides.items():
+            total = 0.0
+            for leg in legs:
+                contract = contracts.get((leg["strike"], leg["type"]))
+                mark = contract.get("mark") if contract else None
+                if mark is None:
+                    complete = False
+                    break
+                total += mark * abs(leg["qty"])
+            side_values[side] = total
+        combined = side_values.get("C", 0.0) + side_values.get("P", 0.0)
+
+        if not complete or combined <= 0:
+            out[pos.get("serial")] = {"C": 0.5, "P": 0.5}
+        else:
+            out[pos.get("serial")] = {s: v / combined for s, v in side_values.items()}
+    return out
+
+
 def option_price_barrier_probability(spot: float, strike: float, side: str, contract: dict, barrier_price: float) -> float | None:
     """P(this specific option's price crosses `barrier_price`) before
     expiry, by converting the option-price barrier into an implied SPX
