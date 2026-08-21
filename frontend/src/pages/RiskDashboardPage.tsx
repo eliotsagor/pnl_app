@@ -181,6 +181,7 @@ export default function RiskDashboardPage() {
   const [showBic, setShowBic] = useState(true);
   const [showOther, setShowOther] = useState(true);
   const [uncheckedNames, setUncheckedNames] = useState<Set<string>>(new Set());
+  const [botSearch, setBotSearch] = useState("");
 
   const quote = data?.quote;
   const hasQuote = quote && quote.price != null;
@@ -655,11 +656,18 @@ export default function RiskDashboardPage() {
           <Box sx={{ width: "2px", bgcolor: "rgba(255,255,255,0.15)", borderRadius: "1px" }} />
         </Box>
 
-        {data.positions && data.positions.some((p) => p.ev != null) && (
+        {data.positions && data.positions.length > 0 && (
         <Box sx={{ flex: "1 1 auto", minWidth: 0 }}>
-          <Typography variant="subtitle2" sx={{ mb: 1 }}>
-            Expected value of holding
-          </Typography>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 1 }}>
+            <Typography variant="subtitle2">Expected value of holding</Typography>
+            <TextField
+              size="small"
+              placeholder="Filter by bot or strategy…"
+              value={botSearch}
+              onChange={(e) => setBotSearch(e.target.value)}
+              sx={{ ml: "auto", minWidth: 220 }}
+            />
+          </Box>
           <TableContainer sx={{ border: "1px solid rgba(255,255,255,0.10)", borderRadius: "12px" }}>
             <Table size="small">
               <TableHead>
@@ -690,7 +698,11 @@ export default function RiskDashboardPage() {
               </TableHead>
               <TableBody>
                 {data.positions
-                  .filter((p) => p.ev != null)
+                  .filter((p) => {
+                    if (!botSearch.trim()) return true;
+                    const needle = botSearch.trim().toLowerCase();
+                    return p.bot_name.toLowerCase().includes(needle) || p.strategy.toLowerCase().includes(needle);
+                  })
                   .sort((a, b) => (a.ev ?? 0) - (b.ev ?? 0))
                   .map((p) => (
                     <TableRow key={p.serial} hover>
