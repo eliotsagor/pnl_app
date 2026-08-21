@@ -27,3 +27,8 @@ class BackfillRequest(BaseModel):
 
 class FetchDayRequest(BaseModel):
     trade_date: date
+
+
+class SaveSnapshotRequest(BaseModel):
+    job_id: str
+    label: str = ""

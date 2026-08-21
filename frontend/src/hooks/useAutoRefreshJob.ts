@@ -20,11 +20,14 @@ export function useAutoRefreshJob<T>(
   const [data, setData] = useState<T | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [paused, setPaused] = useState(false);
   const { job, pollError } = useJobPolling(jobId);
   const notifiedDone = useRef<string | null>(null);
   const timerRef = useRef<number | null>(null);
   const startJobRef = useRef(startJob);
   startJobRef.current = startJob;
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
 
   const start = useCallback(async () => {
     setStartError(null);
@@ -46,20 +49,45 @@ export function useAutoRefreshJob<T>(
   }, []);
 
   // On each completion, capture the result (keeping stale data visible on
-  // error/cancel rather than clearing it) and schedule the next run.
+  // error/cancel rather than clearing it) and schedule the next run --
+  // unless paused (e.g. viewing a loaded snapshot instead of live data),
+  // in which case the timer is simply not rearmed until resumed.
   useEffect(() => {
     if (job?.status === "done" && jobId && notifiedDone.current !== jobId) {
       notifiedDone.current = jobId;
       setData(job.result as T);
       setLastUpdated(new Date());
-      timerRef.current = window.setTimeout(start, intervalMs);
+      if (!pausedRef.current) timerRef.current = window.setTimeout(start, intervalMs);
     } else if ((job?.status === "error" || job?.status === "cancelled") && jobId && notifiedDone.current !== jobId) {
       notifiedDone.current = jobId;
-      timerRef.current = window.setTimeout(start, intervalMs);
+      if (!pausedRef.current) timerRef.current = window.setTimeout(start, intervalMs);
     }
   }, [job?.status, jobId, job?.result, intervalMs, start]);
 
   const isActive = job != null && !["done", "error", "cancelled"].includes(job.status);
 
-  return { job, data, startError, pollError, isActive, lastUpdated, refreshNow: start };
+  const resume = useCallback(() => {
+    setPaused(false);
+    start();
+  }, [start]);
+
+  const pause = useCallback(() => {
+    setPaused(true);
+    if (timerRef.current) window.clearTimeout(timerRef.current);
+  }, []);
+
+  return {
+    job,
+    data,
+    startError,
+    pollError,
+    isActive,
+    lastUpdated,
+    refreshNow: start,
+    setData,
+    paused,
+    pause,
+    resume,
+    jobId,
+  };
 }
