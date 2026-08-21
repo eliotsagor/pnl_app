@@ -627,9 +627,13 @@ def position_expected_values(positions: list[dict]) -> dict:
     little, and "not stopped" mostly means banking what's left.
 
     Summed across a position's short legs (an Elmo's two sides both count,
-    weighted by their own qty). A position with no resolvable stop or
-    missing chain data for its legs is omitted -- treat an absent serial as
-    "unknown," not "EV 0."
+    weighted by their own qty). A position with no stop_target (e.g. an
+    Umbrella Trade) is instead treated as a binary hold-to-expiry bet: pin
+    worthless (keep the full entry credit) vs. finish fully ITM on one side
+    (lose that side's strike width minus the credit), using the short legs'
+    own delta as the pin-probability proxy. A position with missing chain
+    data for its legs is omitted -- treat an absent serial as "unknown," not
+    "EV 0."
     """
     import tradesteward_fetch as tsf
 
@@ -646,7 +650,14 @@ def position_expected_values(positions: list[dict]) -> dict:
         all_legs = [leg for side_legs in sides.values() for leg in side_legs]
         if not all_legs:
             continue
-        leg_probs = [stop_probs.get((leg["strike"], leg["type"])) for leg in all_legs]
+        # This position's own stop, not another position's that happens to
+        # share the same strike -- stop_probs is keyed by (strike, type)
+        # only, so looking a strike up there would pick up an unrelated
+        # position's probability for a strike this position has no stop on
+        # at all (e.g. two positions both short the same 7680C, one with a
+        # stop and one without).
+        has_own_stop = tsf.resolve_stop_barrier(pos, all_legs[0]) is not None
+        leg_probs = [stop_probs.get((leg["strike"], leg["type"])) for leg in all_legs] if has_own_stop else []
         leg_probs = [p for p in leg_probs if p is not None]
         # A two-sided position's two sides carry the same per-side risk-share
         # probability already (see stop_probabilities_by_strike), not
@@ -655,7 +666,8 @@ def position_expected_values(positions: list[dict]) -> dict:
         # same combined stop as if call and put were separate risks.
         # None (not skipped) when there's no resolvable stop (e.g. stop_target
         # "None" on an Umbrella Trade) -- delta/gamma below don't depend on a
-        # stop existing and should still populate.
+        # stop existing and should still populate. The no-stop branch further
+        # down re-derives p_stop as a pin-vs-ITM probability instead.
         p_stop = max(leg_probs) if leg_probs else None
 
         # This position's own net delta/gamma -- unlike net_greeks (book-wide),
@@ -682,9 +694,37 @@ def position_expected_values(positions: list[dict]) -> dict:
 
         if p_stop is None:
             # No resolvable stop (e.g. stop_target "None" on an Umbrella
-            # Trade) -- stop_probability/ev genuinely require one, but
-            # delta/gamma are plain chain math and still populate below.
-            pass
+            # Trade) -- there's no stop to monitor, so this is a binary
+            # hold-to-expiry bet instead: either it pins worthless (keep the
+            # full entry credit) or it finishes fully ITM on one side (lose
+            # that side's strike width minus the credit). Treated as one
+            # combined iron-condor-style risk -- only one side can go to max
+            # width at a time -- using the wider of the two sides' widths and
+            # the higher of the two short legs' delta magnitude as the
+            # pin-probability proxy (a short option's delta is the standard
+            # risk-neutral estimate of finishing ITM).
+            entry = tsf._OPEN_CREDIT_RE.search(pos.get("open_price", "") or "")
+            widths = []
+            for leg in all_legs:
+                same_side_longs = [
+                    tsf.parse_leg(s)
+                    for s in pos.get("legs", [])
+                    if (parsed := tsf.parse_leg(s)) and parsed["type"] == leg["type"] and parsed["qty"] > 0
+                ]
+                if same_side_longs:
+                    widths.append(abs(same_side_longs[0]["strike"] - leg["strike"]))
+            deltas = []
+            for leg in all_legs:
+                c = contracts.get((leg["strike"], leg["type"]))
+                if c and c.get("delta") is not None:
+                    deltas.append(abs(c["delta"]))
+            if entry and widths and deltas:
+                qty = abs(all_legs[0]["qty"])
+                entry_credit = float(entry.group(1).replace(",", ""))
+                width = max(widths)
+                p_stop = max(deltas)
+                total_gain = entry_credit * qty * 100
+                total_loss = max(width * qty * 100 - entry_credit * qty * 100, 0.0)
         elif barrier and barrier["scope"] == "position":
             # $/% Loss or a live trail -- evaluated against the position's
             # combined value, not any single leg's own option price (see
