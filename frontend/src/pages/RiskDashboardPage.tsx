@@ -733,8 +733,8 @@ export default function RiskDashboardPage() {
                       >
                         {p.gamma != null ? fmtSigned(p.gamma, 1) : "—"}
                       </TableCell>
-                      <TableCell align="right" sx={{ color: evColor(p.ev!), fontVariantNumeric: "tabular-nums" }}>
-                        {p.ev! >= 0 ? "+" : "-"}${Math.round(Math.abs(p.ev!)).toLocaleString()}
+                      <TableCell align="right" sx={{ color: p.ev != null ? evColor(p.ev) : "text.secondary", fontVariantNumeric: "tabular-nums" }}>
+                        {p.ev != null ? `${p.ev >= 0 ? "+" : "-"}$${Math.round(Math.abs(p.ev)).toLocaleString()}` : "—"}
                       </TableCell>
                     </TableRow>
                   ))}
