@@ -14,7 +14,7 @@ export function parseLeg(leg: string): Leg | null {
   return { qty: parseInt(m[1], 10), strike: parseFloat(m[2]), type: m[3] as "C" | "P" };
 }
 
-function parseMoney(s: string | undefined): number {
+export function parseMoney(s: string | undefined): number {
   if (!s) return 0;
   const negative = s.trim().startsWith("-") || s.trim().startsWith("(");
   const cleaned = s.replace(/[$,()\-]/g, "").trim();

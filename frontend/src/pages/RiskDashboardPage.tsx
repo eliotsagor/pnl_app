@@ -25,7 +25,7 @@ import { tradestewardApi, schwabApi, type SnapshotMeta } from "../api/tradestewa
 import { useAutoRefreshJob } from "../hooks/useAutoRefreshJob";
 import { useResizableSplit } from "../hooks/useResizableSplit";
 import type { StrikeRow, SpxQuote, ExpectedMove, NetGreeks, Position } from "../api/types";
-import { aggregateShortStrikes, netGreeksFor } from "../utils/strikeAggregation";
+import { aggregateShortStrikes, netGreeksFor, parseMoney } from "../utils/strikeAggregation";
 import { COLOR_GOOD, COLOR_CRITICAL, COLOR_WARNING } from "../theme";
 
 function isOther(p: Position) {
@@ -249,11 +249,49 @@ export default function RiskDashboardPage() {
   const filteredStrikes = aggregateShortStrikes(filteredPositions);
   const filteredGreeks = netGreeksFor(filteredPositions);
 
-  const checkedCount = allPositions.filter((p) => !uncheckedNames.has(p.bot_name)).length;
-  const allChecked = allPositions.length > 0 && checkedCount === allPositions.length;
+  // Rows the EV table actually shows right now (Elmo/BIC/Other + search
+  // filtered), sorted worst-EV-first -- "select all" and the header
+  // checkbox's checked/indeterminate state are scoped to just these, not
+  // every position, so toggling all doesn't silently re-check bots a
+  // filter has hidden.
+  const evTableRows = allPositions
+    .filter((p) => {
+      if (p.is_elmo && !showElmo) return false;
+      if (p.is_bic && !showBic) return false;
+      if (isOther(p) && !showOther) return false;
+      if (!botSearch.trim()) return true;
+      const needle = botSearch.trim().toLowerCase();
+      return p.bot_name.toLowerCase().includes(needle) || p.strategy.toLowerCase().includes(needle);
+    })
+    .sort((a, b) => (a.ev ?? 0) - (b.ev ?? 0));
+
+  const evTotals = evTableRows.reduce(
+    (acc, p) => {
+      if (p.ev == null) return acc;
+      acc.remaining += p.ev;
+      acc.total += parseMoney(p.profit_dollars) + p.ev;
+      return acc;
+    },
+    { remaining: 0, total: 0 }
+  );
+
+  const checkedCount = evTableRows.filter((p) => !uncheckedNames.has(p.bot_name)).length;
+  const allChecked = evTableRows.length > 0 && checkedCount === evTableRows.length;
   const someChecked = checkedCount > 0 && !allChecked;
   const toggleAll = () => {
-    setUncheckedNames(allChecked ? new Set(allPositions.map((p) => p.bot_name)) : new Set());
+    setUncheckedNames((prev) => {
+      const next = new Set(prev);
+      const visibleNames = evTableRows.map((p) => p.bot_name);
+      if (allChecked) {
+        // Check -> uncheck: only the currently-visible rows go into the
+        // unchecked set; bots hidden by the search filter keep whatever
+        // checked state they already had.
+        visibleNames.forEach((name) => next.add(name));
+      } else {
+        visibleNames.forEach((name) => next.delete(name));
+      }
+      return next;
+    });
   };
   const toggleOne = (botName: string) => {
     setUncheckedNames((prev) => {
@@ -786,19 +824,15 @@ export default function RiskDashboardPage() {
                     Gamma
                   </TableCell>
                   <TableCell align="right" sx={{ fontWeight: 600 }}>
-                    EV
+                    EV remaining
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 600 }}>
+                    EV total
                   </TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
-                {data.positions
-                  .filter((p) => {
-                    if (!botSearch.trim()) return true;
-                    const needle = botSearch.trim().toLowerCase();
-                    return p.bot_name.toLowerCase().includes(needle) || p.strategy.toLowerCase().includes(needle);
-                  })
-                  .sort((a, b) => (a.ev ?? 0) - (b.ev ?? 0))
-                  .map((p) => (
+                {evTableRows.map((p) => (
                     <TableRow key={p.serial} hover>
                       <TableCell padding="checkbox">
                         <Checkbox
@@ -830,9 +864,31 @@ export default function RiskDashboardPage() {
                       <TableCell align="right" sx={{ color: p.ev != null ? evColor(p.ev) : "text.secondary", fontVariantNumeric: "tabular-nums" }}>
                         {p.ev != null ? `${p.ev >= 0 ? "+" : "-"}$${Math.round(Math.abs(p.ev)).toLocaleString()}` : "—"}
                       </TableCell>
+                      <TableCell
+                        align="right"
+                        sx={{ color: p.ev != null ? evColor(parseMoney(p.profit_dollars) + p.ev) : "text.secondary", fontVariantNumeric: "tabular-nums" }}
+                      >
+                        {p.ev != null
+                          ? `${parseMoney(p.profit_dollars) + p.ev >= 0 ? "+" : "-"}$${Math.round(Math.abs(parseMoney(p.profit_dollars) + p.ev)).toLocaleString()}`
+                          : "—"}
+                      </TableCell>
                     </TableRow>
-                  ))}
+                ))}
               </TableBody>
+              {evTableRows.some((p) => p.ev != null) && (
+                <TableBody>
+                  <TableRow sx={{ "& td": { borderTop: "1px solid rgba(255,255,255,0.15)", fontWeight: 600 } }}>
+                    <TableCell />
+                    <TableCell colSpan={4}>Total</TableCell>
+                    <TableCell align="right" sx={{ color: evColor(evTotals.remaining), fontVariantNumeric: "tabular-nums" }}>
+                      {evTotals.remaining >= 0 ? "+" : "-"}${Math.round(Math.abs(evTotals.remaining)).toLocaleString()}
+                    </TableCell>
+                    <TableCell align="right" sx={{ color: evColor(evTotals.total), fontVariantNumeric: "tabular-nums" }}>
+                      {evTotals.total >= 0 ? "+" : "-"}${Math.round(Math.abs(evTotals.total)).toLocaleString()}
+                    </TableCell>
+                  </TableRow>
+                </TableBody>
+              )}
             </Table>
           </TableContainer>
         </Box>
