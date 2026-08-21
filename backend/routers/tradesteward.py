@@ -12,8 +12,8 @@ import parser as ss_parser
 import quotes
 import schwab_client
 import tradesteward_fetch as tsf
-from backend import jobs
-from backend.schemas import BackfillRequest, FetchDayRequest
+from backend import jobs, snapshots
+from backend.schemas import BackfillRequest, FetchDayRequest, SaveSnapshotRequest
 
 router = APIRouter(tags=["tradesteward"])
 
@@ -181,6 +181,36 @@ def fetch_risk():
         raise HTTPException(status_code=409, detail=str(e))
     threading.Thread(target=_run_fetch_risk, args=(job.id,), daemon=True).start()
     return {"job_id": job.id}
+
+
+@router.post("/tradesteward/risk/snapshots")
+def save_risk_snapshot(body: SaveSnapshotRequest):
+    job = jobs.get_job(body.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != "done" or job.result is None:
+        raise HTTPException(status_code=409, detail="Job hasn't finished successfully yet")
+    return snapshots.save_snapshot(job.result, body.label)
+
+
+@router.get("/tradesteward/risk/snapshots")
+def list_risk_snapshots():
+    return snapshots.list_snapshots()
+
+
+@router.get("/tradesteward/risk/snapshots/{snapshot_id}")
+def get_risk_snapshot(snapshot_id: str):
+    result = snapshots.load_snapshot(snapshot_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+    return result
+
+
+@router.delete("/tradesteward/risk/snapshots/{snapshot_id}")
+def delete_risk_snapshot(snapshot_id: str):
+    if not snapshots.delete_snapshot(snapshot_id):
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+    return {"ok": True}
 
 
 def _run_backfill(job_id: str, start: date, end: date | None):

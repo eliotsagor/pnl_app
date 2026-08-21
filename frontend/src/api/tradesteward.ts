@@ -12,6 +12,12 @@ export interface Job {
   error: string | null;
 }
 
+export interface SnapshotMeta {
+  id: string;
+  label: string;
+  saved_at: string;
+}
+
 export const tradestewardApi = {
   fetchDay: (tradeDate: string) => api.post<{ job_id: string }>("/tradesteward/fetch-day", { trade_date: tradeDate }),
   backfill: (start: string, end?: string) =>
@@ -20,4 +26,9 @@ export const tradestewardApi = {
   fetchRisk: () => api.post<{ job_id: string }>("/tradesteward/risk", {}),
   jobStatus: (jobId: string) => api.get<Job>(`/jobs/${jobId}`),
   cancelJob: (jobId: string) => api.post<{ ok: boolean }>(`/jobs/${jobId}/cancel`),
+  saveRiskSnapshot: (jobId: string, label: string) =>
+    api.post<SnapshotMeta>("/tradesteward/risk/snapshots", { job_id: jobId, label }),
+  listRiskSnapshots: () => api.get<SnapshotMeta[]>("/tradesteward/risk/snapshots"),
+  loadRiskSnapshot: <T>(snapshotId: string) => api.get<T>(`/tradesteward/risk/snapshots/${snapshotId}`),
+  deleteRiskSnapshot: (snapshotId: string) => api.del<{ ok: boolean }>(`/tradesteward/risk/snapshots/${snapshotId}`),
 };

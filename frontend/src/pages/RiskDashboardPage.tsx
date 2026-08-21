@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Alert,
   Box,
@@ -7,16 +7,20 @@ import {
   Chip,
   CircularProgress,
   FormControlLabel,
+  MenuItem,
+  Select,
   Table,
   TableBody,
   TableCell,
   TableContainer,
   TableHead,
   TableRow,
+  TextField,
   Typography,
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
-import { tradestewardApi } from "../api/tradesteward";
+import SaveIcon from "@mui/icons-material/Save";
+import { tradestewardApi, type SnapshotMeta } from "../api/tradesteward";
 import { useAutoRefreshJob } from "../hooks/useAutoRefreshJob";
 import { useResizableSplit } from "../hooks/useResizableSplit";
 import type { StrikeRow, SpxQuote, ExpectedMove, NetGreeks, Position } from "../api/types";
@@ -103,9 +107,63 @@ function EmMarker({ label, color = COLOR_WARNING }: { label: string; color?: str
 }
 
 export default function RiskDashboardPage() {
-  const { job, data, startError, pollError, isActive, lastUpdated, refreshNow } =
+  const { job, data, startError, pollError, isActive, lastUpdated, refreshNow, setData, paused, pause, resume, jobId } =
     useAutoRefreshJob<RiskResult>(tradestewardApi.fetchRisk);
   const { width: leftWidth, onDividerMouseDown } = useResizableSplit("risk-split-width", 680, 420, 1200);
+
+  // Snapshots: freeze the current (live) result to disk so the dashboard
+  // can still be worked on once the market's closed and TradeSteward/Schwab
+  // have nothing live to fetch. Loading a snapshot pauses auto-refresh (it
+  // would otherwise silently overwrite the loaded data on its next 30s
+  // tick) -- "Back to live" resumes it.
+  const [snapshots, setSnapshots] = useState<SnapshotMeta[]>([]);
+  const [snapshotLabel, setSnapshotLabel] = useState("");
+  const [savingSnapshot, setSavingSnapshot] = useState(false);
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
+  const [viewingSnapshotId, setViewingSnapshotId] = useState<string | null>(null);
+
+  const refreshSnapshotList = () => {
+    tradestewardApi
+      .listRiskSnapshots()
+      .then(setSnapshots)
+      .catch((e) => setSnapshotError((e as Error).message));
+  };
+
+  const saveSnapshot = async () => {
+    if (!jobId || !data) return;
+    setSavingSnapshot(true);
+    setSnapshotError(null);
+    try {
+      await tradestewardApi.saveRiskSnapshot(jobId, snapshotLabel);
+      setSnapshotLabel("");
+      refreshSnapshotList();
+    } catch (e) {
+      setSnapshotError((e as Error).message);
+    } finally {
+      setSavingSnapshot(false);
+    }
+  };
+
+  const loadSnapshot = async (snapshotId: string) => {
+    setSnapshotError(null);
+    try {
+      const result = await tradestewardApi.loadRiskSnapshot<RiskResult>(snapshotId);
+      pause();
+      setData(result);
+      setViewingSnapshotId(snapshotId);
+    } catch (e) {
+      setSnapshotError((e as Error).message);
+    }
+  };
+
+  const backToLive = () => {
+    setViewingSnapshotId(null);
+    resume();
+  };
+
+  useEffect(() => {
+    refreshSnapshotList();
+  }, []);
 
   // Category checkboxes (Elmo/BIC/Other) and per-bot checkboxes both narrow
   // which positions feed the left grid, the net delta/gamma header, and the
@@ -253,22 +311,77 @@ export default function RiskDashboardPage() {
             EM ±{em!.expected_move!.toFixed(1)} ({fmtPrice(emDown!)} – {fmtPrice(emUp!)})
           </Typography>
         )}
-        {lastUpdated && (
+        {lastUpdated && !paused && (
           <Typography variant="caption" color="text.secondary">
             updated {lastUpdated.toLocaleTimeString()}
             {isActive ? " · refreshing…" : ""}
           </Typography>
         )}
-        <Button
-          variant="contained"
+        {paused && (
+          <Chip
+            size="small"
+            label={`Viewing snapshot${snapshots.find((s) => s.id === viewingSnapshotId)?.label ? `: ${snapshots.find((s) => s.id === viewingSnapshotId)!.label}` : ""}`}
+            sx={{ bgcolor: `${COLOR_WARNING}22`, color: COLOR_WARNING }}
+          />
+        )}
+        {paused ? (
+          <Button variant="outlined" size="small" onClick={backToLive} sx={{ ml: "auto" }}>
+            Back to live
+          </Button>
+        ) : (
+          <Button
+            variant="contained"
+            size="small"
+            startIcon={<RefreshIcon />}
+            onClick={refreshNow}
+            disabled={isActive}
+            sx={{ ml: "auto" }}
+          >
+            {isActive ? (data ? "Refreshing…" : "Starting…") : data ? "Refresh now" : "Load positions"}
+          </Button>
+        )}
+      </Box>
+
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, mb: 2, flexWrap: "wrap" }}>
+        <TextField
           size="small"
-          startIcon={<RefreshIcon />}
-          onClick={refreshNow}
-          disabled={isActive}
-          sx={{ ml: "auto" }}
+          placeholder="Snapshot label (optional)"
+          value={snapshotLabel}
+          onChange={(e) => setSnapshotLabel(e.target.value)}
+          sx={{ minWidth: 220 }}
+        />
+        <Button
+          size="small"
+          variant="outlined"
+          startIcon={<SaveIcon />}
+          onClick={saveSnapshot}
+          disabled={!data || paused || savingSnapshot}
         >
-          {isActive ? (data ? "Refreshing…" : "Starting…") : data ? "Refresh now" : "Load positions"}
+          {savingSnapshot ? "Saving…" : "Save snapshot"}
         </Button>
+        {snapshots.length > 0 && (
+          <Select
+            size="small"
+            displayEmpty
+            value={viewingSnapshotId ?? ""}
+            onChange={(e) => e.target.value && loadSnapshot(e.target.value)}
+            sx={{ minWidth: 260 }}
+          >
+            <MenuItem value="">
+              <em>Load a saved snapshot…</em>
+            </MenuItem>
+            {snapshots.map((s) => (
+              <MenuItem key={s.id} value={s.id}>
+                {(s.label || "snapshot") + " — " + new Date(s.saved_at).toLocaleString()}
+              </MenuItem>
+            ))}
+          </Select>
+        )}
+        {snapshotError && (
+          <Typography variant="caption" color="error">
+            {snapshotError}
+          </Typography>
+        )}
       </Box>
 
       {filteredGreeks && (
