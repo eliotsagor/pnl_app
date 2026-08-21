@@ -13,7 +13,7 @@ import quotes
 import schwab_client
 import tradesteward_fetch as tsf
 from backend import jobs, snapshots
-from backend.schemas import BackfillRequest, FetchDayRequest, SaveSnapshotRequest
+from backend.schemas import BackfillRequest, CompleteSchwabLoginRequest, FetchDayRequest, SaveSnapshotRequest
 
 router = APIRouter(tags=["tradesteward"])
 
@@ -210,6 +210,33 @@ def get_risk_snapshot(snapshot_id: str):
 def delete_risk_snapshot(snapshot_id: str):
     if not snapshots.delete_snapshot(snapshot_id):
         raise HTTPException(status_code=404, detail="Snapshot not found")
+    return {"ok": True}
+
+
+@router.post("/schwab/login/begin")
+def begin_schwab_login():
+    """Step 1 of in-app Schwab re-auth: returns the authorization URL to
+    open in a new tab, plus the state needed for step 2. No browser
+    automation involved (unlike TradeSteward's flow) -- this just builds
+    the URL; you complete the actual login/consent in your own browser tab
+    and paste back the resulting redirect URL."""
+    try:
+        return schwab_client.begin_login_web()
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@router.post("/schwab/login/complete")
+def complete_schwab_login(body: CompleteSchwabLoginRequest):
+    """Step 2: exchanges the pasted redirect URL for a token. After this,
+    the option-chain-backed figures (Stop%, EV, delta/gamma, expected
+    move) on the Risk page start working again on the next fetch."""
+    try:
+        schwab_client.complete_login_web(body.received_url, body.state)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Login didn't complete: {e}")
     return {"ok": True}
 
 
