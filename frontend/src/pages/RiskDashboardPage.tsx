@@ -244,7 +244,9 @@ export default function RiskDashboardPage() {
     if (p.is_elmo && !showElmo) return false;
     if (p.is_bic && !showBic) return false;
     if (isOther(p) && !showOther) return false;
-    return true;
+    if (!botSearch.trim()) return true;
+    const needle = botSearch.trim().toLowerCase();
+    return p.bot_name.toLowerCase().includes(needle) || p.strategy.toLowerCase().includes(needle);
   });
   const filteredStrikes = aggregateShortStrikes(filteredPositions);
   const filteredGreeks = netGreeksFor(filteredPositions);
