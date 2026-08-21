@@ -20,7 +20,8 @@ import {
 } from "@mui/material";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import SaveIcon from "@mui/icons-material/Save";
-import { tradestewardApi, type SnapshotMeta } from "../api/tradesteward";
+import LinkIcon from "@mui/icons-material/Link";
+import { tradestewardApi, schwabApi, type SnapshotMeta } from "../api/tradesteward";
 import { useAutoRefreshJob } from "../hooks/useAutoRefreshJob";
 import { useResizableSplit } from "../hooks/useResizableSplit";
 import type { StrikeRow, SpxQuote, ExpectedMove, NetGreeks, Position } from "../api/types";
@@ -164,6 +165,53 @@ export default function RiskDashboardPage() {
   useEffect(() => {
     refreshSnapshotList();
   }, []);
+
+  // Schwab re-auth: the option-chain-backed figures (Stop%, EV, delta/gamma,
+  // expected move) go blank once the Schwab token expires (roughly every 7
+  // days). This walks through the same copy-paste OAuth flow
+  // schwab_client.py's --login-manual does, but without leaving the app or
+  // a terminal: begin opens the Schwab login in a new tab, you paste back
+  // the resulting (unloadable) redirect URL, complete exchanges it for a
+  // fresh token.
+  const [schwabAuthUrl, setSchwabAuthUrl] = useState<string | null>(null);
+  const [schwabState, setSchwabState] = useState<string | null>(null);
+  const [schwabPastedUrl, setSchwabPastedUrl] = useState("");
+  const [schwabBusy, setSchwabBusy] = useState(false);
+  const [schwabError, setSchwabError] = useState<string | null>(null);
+  const [schwabDone, setSchwabDone] = useState(false);
+
+  const beginSchwabLogin = async () => {
+    setSchwabBusy(true);
+    setSchwabError(null);
+    setSchwabDone(false);
+    try {
+      const { authorization_url, state } = await schwabApi.beginLogin();
+      setSchwabAuthUrl(authorization_url);
+      setSchwabState(state);
+      window.open(authorization_url, "_blank", "noopener,noreferrer");
+    } catch (e) {
+      setSchwabError((e as Error).message);
+    } finally {
+      setSchwabBusy(false);
+    }
+  };
+
+  const completeSchwabLogin = async () => {
+    if (!schwabState || !schwabPastedUrl.trim()) return;
+    setSchwabBusy(true);
+    setSchwabError(null);
+    try {
+      await schwabApi.completeLogin(schwabPastedUrl.trim(), schwabState);
+      setSchwabDone(true);
+      setSchwabAuthUrl(null);
+      setSchwabState(null);
+      setSchwabPastedUrl("");
+    } catch (e) {
+      setSchwabError((e as Error).message);
+    } finally {
+      setSchwabBusy(false);
+    }
+  };
 
   // Category checkboxes (Elmo/BIC/Other) and per-bot checkboxes both narrow
   // which positions feed the left grid, the net delta/gamma header, and the
@@ -383,7 +431,53 @@ export default function RiskDashboardPage() {
             {snapshotError}
           </Typography>
         )}
+        <Button
+          size="small"
+          variant="outlined"
+          startIcon={<LinkIcon />}
+          onClick={beginSchwabLogin}
+          disabled={schwabBusy}
+          sx={{ ml: "auto" }}
+        >
+          Reconnect Schwab
+        </Button>
       </Box>
+
+      {schwabAuthUrl && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            A Schwab login tab just opened. Sign in and approve access there — the page it lands on afterward won't
+            load (that's expected), so copy the full URL from that tab's address bar and paste it below.
+          </Typography>
+          <Box sx={{ display: "flex", gap: 1, alignItems: "center" }}>
+            <TextField
+              size="small"
+              placeholder="Paste the redirect URL here"
+              value={schwabPastedUrl}
+              onChange={(e) => setSchwabPastedUrl(e.target.value)}
+              sx={{ flex: 1 }}
+            />
+            <Button
+              size="small"
+              variant="contained"
+              onClick={completeSchwabLogin}
+              disabled={schwabBusy || !schwabPastedUrl.trim()}
+            >
+              {schwabBusy ? "Connecting…" : "Complete login"}
+            </Button>
+          </Box>
+        </Alert>
+      )}
+      {schwabDone && (
+        <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSchwabDone(false)}>
+          Schwab reconnected — refresh to see Stop%/EV/delta/gamma populate again.
+        </Alert>
+      )}
+      {schwabError && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {schwabError}
+        </Alert>
+      )}
 
       {filteredGreeks && (
         <Box sx={{ display: "flex", gap: 4, mb: 2, flexWrap: "wrap" }}>

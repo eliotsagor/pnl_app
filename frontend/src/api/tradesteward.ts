@@ -18,6 +18,18 @@ export interface SnapshotMeta {
   saved_at: string;
 }
 
+export interface SchwabLoginBegin {
+  authorization_url: string;
+  callback_url: string;
+  state: string;
+}
+
+export const schwabApi = {
+  beginLogin: () => api.post<SchwabLoginBegin>("/schwab/login/begin", {}),
+  completeLogin: (receivedUrl: string, state: string) =>
+    api.post<{ ok: boolean }>("/schwab/login/complete", { received_url: receivedUrl, state }),
+};
+
 export const tradestewardApi = {
   fetchDay: (tradeDate: string) => api.post<{ job_id: string }>("/tradesteward/fetch-day", { trade_date: tradeDate }),
   backfill: (start: string, end?: string) =>

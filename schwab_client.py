@@ -108,6 +108,62 @@ def login_manual():
     )
 
 
+def begin_login_web() -> dict:
+    """Step 1 of the in-app (non-terminal) re-auth flow: returns
+    {'authorization_url': str, 'callback_url': str, 'state': str} -- the
+    frontend opens authorization_url in a new tab for you to log in, then
+    you paste the resulting (unloadable) redirect URL back into the app,
+    which calls complete_login_web with it.
+
+    The 'state' value must be handed back unchanged to complete_login_web
+    (reconstructing the auth context there) -- schwab-py's AuthContext is
+    documented as serializable for exactly this reason, so there's no
+    server-side session/object to keep alive between the two steps.
+    """
+    import schwab
+
+    creds = _load_saved_credentials()
+    if not creds:
+        raise RuntimeError(
+            "No Schwab app credentials saved. Run "
+            "`python schwab_client.py --set-credentials` first."
+        )
+    app_key, _ = creds
+    ctx = schwab.auth.get_auth_context(app_key, CALLBACK_URL)
+    return {"authorization_url": ctx.authorization_url, "callback_url": ctx.callback_url, "state": ctx.state}
+
+
+def complete_login_web(received_url: str, state: str) -> None:
+    """Step 2: exchanges the pasted redirect URL for a token, using the
+    state from begin_login_web to reconstruct the auth context (see its
+    docstring). Writes the resulting token to TOKEN_PATH, same as the
+    terminal-based login flows -- after this, get_client() just works."""
+    import schwab
+    from schwab.auth import AuthContext
+
+    creds = _load_saved_credentials()
+    if not creds:
+        raise RuntimeError(
+            "No Schwab app credentials saved. Run "
+            "`python schwab_client.py --set-credentials` first."
+        )
+    app_key, app_secret = creds
+    ctx = AuthContext(CALLBACK_URL, "", state)
+    # schwab-py's own manual-flow helper (client_from_manual_flow) builds its
+    # token_write_func the same way -- this is the module's private
+    # "write token to this path" factory, not exported under a public name,
+    # but reachable via getattr since Python only mangles __name inside
+    # class bodies, not at module level.
+    make_update_token_func = getattr(schwab.auth, "__make_update_token_func")
+    schwab.auth.client_from_received_url(
+        api_key=app_key,
+        app_secret=app_secret,
+        auth_context=ctx,
+        received_url=received_url,
+        token_write_func=make_update_token_func(str(TOKEN_PATH)),
+    )
+
+
 def spx_expected_move_remaining() -> dict:
     """Market-implied expected move for the rest of today's session, from the
     real SPX 0DTE ATM straddle (call mid + put mid at the strike closest to
@@ -592,14 +648,15 @@ def position_expected_values(positions: list[dict]) -> dict:
             continue
         leg_probs = [stop_probs.get((leg["strike"], leg["type"])) for leg in all_legs]
         leg_probs = [p for p in leg_probs if p is not None]
-        if not leg_probs:
-            continue
         # A two-sided position's two sides carry the same per-side risk-share
         # probability already (see stop_probabilities_by_strike), not
         # independent events, so the position's own overall stop chance is
         # the higher of the two -- taking the max avoids double counting the
         # same combined stop as if call and put were separate risks.
-        p_stop = max(leg_probs)
+        # None (not skipped) when there's no resolvable stop (e.g. stop_target
+        # "None" on an Umbrella Trade) -- delta/gamma below don't depend on a
+        # stop existing and should still populate.
+        p_stop = max(leg_probs) if leg_probs else None
 
         # This position's own net delta/gamma -- unlike net_greeks (book-wide),
         # this is scoped to just this position's legs (both short and long,
@@ -623,7 +680,12 @@ def position_expected_values(positions: list[dict]) -> dict:
         total_gain = None
         total_loss = None
 
-        if barrier and barrier["scope"] == "position":
+        if p_stop is None:
+            # No resolvable stop (e.g. stop_target "None" on an Umbrella
+            # Trade) -- stop_probability/ev genuinely require one, but
+            # delta/gamma are plain chain math and still populate below.
+            pass
+        elif barrier and barrier["scope"] == "position":
             # $/% Loss or a live trail -- evaluated against the position's
             # combined value, not any single leg's own option price (see
             # resolve_stop_barrier / position_give_back). gain_from_here is
@@ -661,12 +723,15 @@ def position_expected_values(positions: list[dict]) -> dict:
             if not priced_any:
                 total_gain = total_loss = None
 
-        if total_gain is None or total_loss is None:
-            continue
+        if p_stop is not None and total_gain is not None and total_loss is not None:
+            stop_probability = p_stop
+            ev = (1 - p_stop) * total_gain - p_stop * total_loss
+        else:
+            stop_probability = None
+            ev = None
 
-        ev = (1 - p_stop) * total_gain - p_stop * total_loss
         out[pos.get("serial")] = {
-            "stop_probability": p_stop,
+            "stop_probability": stop_probability,
             "ev": ev,
             "delta": pos_delta,
             "gamma": pos_gamma,

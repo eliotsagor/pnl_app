@@ -32,3 +32,8 @@ class FetchDayRequest(BaseModel):
 class SaveSnapshotRequest(BaseModel):
     job_id: str
     label: str = ""
+
+
+class CompleteSchwabLoginRequest(BaseModel):
+    received_url: str
+    state: str
