@@ -728,10 +728,19 @@ export default function RiskDashboardPage() {
             </Box>
             <Box sx={{ display: "flex", justifyContent: "space-between" }}>
               <Typography variant="body2" color="text.secondary">
-                EV
+                EV remaining
               </Typography>
               <Typography variant="body2" sx={{ color: evColor(sum(calls, "ev")) }}>
                 {sum(calls, "ev") >= 0 ? "+" : "-"}${Math.round(Math.abs(sum(calls, "ev"))).toLocaleString()}
+              </Typography>
+            </Box>
+            <Box sx={{ display: "flex", justifyContent: "space-between" }}>
+              <Typography variant="body2" color="text.secondary">
+                EV total
+              </Typography>
+              <Typography variant="body2" sx={{ color: evColor(sum(calls, "captured") + sum(calls, "ev")) }}>
+                {sum(calls, "captured") + sum(calls, "ev") >= 0 ? "+" : "-"}$
+                {Math.round(Math.abs(sum(calls, "captured") + sum(calls, "ev"))).toLocaleString()}
               </Typography>
             </Box>
           </Box>
@@ -765,10 +774,19 @@ export default function RiskDashboardPage() {
             </Box>
             <Box sx={{ display: "flex", justifyContent: "space-between" }}>
               <Typography variant="body2" color="text.secondary">
-                EV
+                EV remaining
               </Typography>
               <Typography variant="body2" sx={{ color: evColor(sum(puts, "ev")) }}>
                 {sum(puts, "ev") >= 0 ? "+" : "-"}${Math.round(Math.abs(sum(puts, "ev"))).toLocaleString()}
+              </Typography>
+            </Box>
+            <Box sx={{ display: "flex", justifyContent: "space-between" }}>
+              <Typography variant="body2" color="text.secondary">
+                EV total
+              </Typography>
+              <Typography variant="body2" sx={{ color: evColor(sum(puts, "captured") + sum(puts, "ev")) }}>
+                {sum(puts, "captured") + sum(puts, "ev") >= 0 ? "+" : "-"}$
+                {Math.round(Math.abs(sum(puts, "captured") + sum(puts, "ev"))).toLocaleString()}
               </Typography>
             </Box>
           </Box>
