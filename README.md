@@ -121,6 +121,39 @@ From the app: **Enter Day → Fetch from TradeSteward** fetches a single day for
 review/save, and its **Backfill a date range** panel runs the same catch-up —
 both show live progress instead of blocking with no feedback.
 
+## Schwab API setup (Risk dashboard expected-move overlay)
+
+The Risk dashboard's expected-move overlay needs a real SPX 0DTE ATM straddle
+price, which comes from the Schwab Trader API via `schwab_client.py`. This is
+optional — the rest of the app works without it — but if you want that
+overlay, each person running the app needs **their own** Schwab developer app
+(the key/secret are tied to your Schwab account, not shareable):
+
+1. Register a developer app at https://developer.schwab.com (needs a Schwab
+   brokerage account). Set its callback/redirect URL to exactly
+   `https://127.0.0.1:8080`. Wait for the app status to show "Ready For Use"
+   (can take a day or so after creation).
+2. Store the app key/secret locally (prompts for both, hidden input, saved to
+   Windows Credential Manager — never written to disk in plaintext):
+   ```powershell
+   .\.venv\Scripts\python.exe schwab_client.py --set-credentials
+   ```
+3. Do the one-time OAuth browser consent (opens a browser to Schwab's login
+   page, then redirects to `https://127.0.0.1:8080`; expect a self-signed-cert
+   warning there — proceed past it):
+   ```powershell
+   .\.venv\Scripts\python.exe schwab_client.py --login
+   ```
+   If that fails to catch the redirect automatically (e.g. the cert warning
+   has no bypass option), use the copy-paste fallback instead:
+   ```powershell
+   .\.venv\Scripts\python.exe schwab_client.py --login-manual
+   ```
+4. The resulting token is cached at `~/.schwab_token.json` and refreshes
+   itself silently after that — no need to repeat step 3 day to day.
+
+To remove saved credentials: `python schwab_client.py --clear-credentials`.
+
 ## Daily workflow
 
 1. **Enter Day → Fetch from TradeSteward** → pick the date → "Fetch this day"
