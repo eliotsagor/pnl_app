@@ -39,6 +39,16 @@ pnl_app/
 
 ## Setup
 
+**Easiest: double-click `start_app.bat`.** First run creates the Python venv,
+installs backend + frontend dependencies, and opens the app in your browser
+at http://localhost:8000. Every run after that just starts the server — no
+commands to type. Requires Python and Node.js already installed
+(https://python.org, https://nodejs.org); the script will tell you if either
+is missing.
+
+If you'd rather set it up by hand (or the double-click script doesn't work
+for you):
+
 ```powershell
 cd pnl_app
 python -m venv .venv
