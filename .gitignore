@@ -9,3 +9,10 @@ frontend/dist/
 # Generated exports / backups -- pnl.db is the source of truth
 PnL_Export_*.xlsx
 template.xlsx.bak*
+
+# Trading DB and real trade data live in a separate private repo (pnl_app_db) -- not shared here
+pnl.db
+template.xlsx
+
+# Position/EOD snapshots contain real trade data -- not for sharing
+snapshots/
