@@ -514,7 +514,16 @@ def _leg_stop_probability(spot: float, contracts: dict, pos: dict, leg: dict, ba
     contract = contracts.get(key)
     if not contract:
         return None
-    return option_price_barrier_probability(spot, leg["strike"], leg["type"], contract, barrier["price"])
+    result = option_price_barrier_probability(spot, leg["strike"], leg["type"], contract, barrier["price"])
+    import os
+    if os.environ.get("PNL_DEBUG_STOP_PROB"):
+        print(
+            f"[stop_prob] strike={leg['strike']}{leg['type']} spot={spot} "
+            f"mark={contract.get('mark') or contract.get('last')} delta={contract.get('delta')} "
+            f"gamma={contract.get('gamma')} iv={contract.get('volatility')} "
+            f"barrier_price={barrier['price']} -> p={result}"
+        )
+    return result
 
 
 def _is_combined_move_position(position: dict) -> bool:
