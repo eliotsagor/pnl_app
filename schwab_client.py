@@ -388,76 +388,111 @@ def position_side_split_weights(positions: list[dict], contracts: dict) -> dict:
     return out
 
 
+def _bs_price(spot: float, strike: float, side: str, iv: float, years: float) -> float:
+    """European option price via Black-Scholes (r=0, q=0 -- SPX is
+    cash/index-settled, and for a same-day 0DTE the drag from either is
+    negligible next to iv*sqrt(years)). side is 'C' or 'P'.
+
+    Used to reprice a leg at trial spot levels while solving for the implied
+    SPX barrier below, instead of extrapolating delta/gamma in a Taylor
+    series. That extrapolation broke down for stops a large $ distance away:
+    it holds gamma constant over the whole move, but real gamma shrinks as
+    the option goes deep ITM/OTM (delta saturates at 0 or 1), so a fixed
+    gamma over a multi-point move overstated how much it helps and implied
+    a barrier much closer than realistic. Repricing with BS at each trial
+    spot has delta/gamma implicitly correct at every point along the way --
+    no extrapolation, no separate closed-form step needed.
+    """
+    import math
+
+    if years <= 0 or iv <= 0:
+        return max(spot - strike, 0.0) if side == "C" else max(strike - spot, 0.0)
+    sqrt_t = iv * math.sqrt(years)
+    d1 = (math.log(spot / strike) + 0.5 * iv * iv * years) / sqrt_t
+    d2 = d1 - sqrt_t
+    Phi = lambda x: 0.5 * math.erfc(-x / math.sqrt(2))
+    if side == "C":
+        return spot * Phi(d1) - strike * Phi(d2)
+    return strike * Phi(-d2) - spot * Phi(-d1)
+
+
+def _solve_implied_barrier_spot(spot: float, strike: float, side: str, iv: float, years: float, barrier_price: float) -> float | None:
+    """Spot level implied_barrier such that _bs_price(implied_barrier, ...)
+    == barrier_price, found by bisection in the direction that increases
+    this option's price (up for a call, down for a put) -- the direction
+    that matters for a short option's stop. Returns None if the barrier
+    price isn't reachable within a wide bracket (e.g. it exceeds the
+    option's max possible value, or is below its intrinsic floor already).
+    """
+    current = _bs_price(spot, strike, side, iv, years)
+    if current >= barrier_price:
+        # Already at or past the barrier (e.g. mark has already moved
+        # beyond the stop trigger) -- the barrier is already touched, so
+        # report it as being right at today's spot rather than running
+        # bisection, which assumes price_at(lo) < barrier <= price_at(hi)
+        # and would otherwise wrongly converge back to spot itself.
+        return spot
+    direction = 1 if side == "C" else -1
+    # Bracket the barrier by stepping outward in the price-increasing
+    # direction until BS price crosses it (or we give up -- 5000 SPX points
+    # is far past any plausible 0DTE move, so a barrier not reached by then
+    # is effectively unreachable, e.g. barrier_price > the option's max
+    # possible value).
+    lo, hi = spot, spot
+    step = 5.0
+    for _ in range(20):
+        hi = spot + direction * step
+        if hi <= 0:
+            return None
+        price_at_hi = _bs_price(hi, strike, side, iv, years)
+        if price_at_hi >= barrier_price:
+            break
+        step *= 2
+    else:
+        return None
+    lo, hi = spot, hi
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        price_at_mid = _bs_price(mid, strike, side, iv, years)
+        if price_at_mid < barrier_price:
+            lo = mid
+        else:
+            hi = mid
+    return hi
+
+
 def option_price_barrier_probability(spot: float, strike: float, side: str, contract: dict, barrier_price: float) -> float | None:
     """P(this specific option's price crosses `barrier_price`) before
-    expiry, by converting the option-price barrier into an implied SPX
-    barrier via the contract's own delta *and* gamma (second-order local
-    approximation: d(option price) ~= delta*dS + 0.5*gamma*dS^2, solved for
-    dS -- not just dOptionPrice / |delta|), then applying the same
+    expiry: solve for the implied SPX barrier by repricing the option with
+    Black-Scholes at trial spot levels (see _solve_implied_barrier_spot)
+    rather than extrapolating today's delta/gamma, then apply the same
     touch-probability formula to that implied SPX level using the
     contract's own IV.
 
-    Plain delta-only linearization understates how fast an option's price
-    accelerates toward its stop as spot approaches the strike (gamma always
-    pushes the option's price in its own favor -- i.e. helps it move toward
-    a higher price/its stop -- for a bought-back short option, regardless of
-    call or put), so it understates stop probability once the position is
-    already fairly close to triggering. This is still a local approximation
-    (gamma itself isn't constant either, and IV is held fixed), not a full
-    path-dependent option-price barrier model -- but it's the standard next
-    order up, and matches the delta+gamma local model already used for the
-    book's +-10pt delta shock in net_greeks.
+    Repricing directly avoids the failure mode of a delta/gamma Taylor
+    extrapolation: that approach holds gamma fixed over the whole move to
+    the barrier, but real gamma shrinks as an option goes deep ITM/OTM
+    (delta saturates at 0/1), so for a stop a large $ distance away the
+    fixed-gamma extrapolation implied a much closer barrier than realistic
+    and overstated stop probability. BS repricing has delta/gamma correct
+    at every trial spot along the way, with no separate extrapolation step.
+
+    Still an approximation in one respect: it holds IV fixed at today's
+    quoted level for the contract rather than modeling a vol smile/skew
+    (how IV itself varies by strike) -- a real smile would mean the implied
+    barrier should be priced with the IV *at that trial strike/spot*, which
+    would need a source of skew data we don't have wired up yet. Flagging
+    this as the natural next refinement, not implementing it now.
     """
-    delta = contract.get("delta")
-    gamma = contract.get("gamma")
     iv = contract.get("volatility")
     mark = contract.get("mark") or contract.get("last")
-    if not delta or not iv or iv <= 0 or mark is None:
+    if not iv or iv <= 0 or mark is None:
         return None
-    delta = abs(delta)
-    gamma = gamma if gamma is not None else 0.0
-    price_move_needed = barrier_price - mark  # positive: option needs to gain value to hit the stop
-    spot_points_needed = _solve_spot_points_for_price_move(delta, gamma, price_move_needed)
-    if spot_points_needed is None:
-        return None
-    # A short call's price rises as spot rises; a short put's price rises as
-    # spot falls -- so the SPX barrier is spot +points for a call's stop,
-    # spot -points for a put's stop (points itself may be negative if the
-    # option is already past its stop price).
-    direction = 1 if side == "C" else -1
-    implied_barrier = spot + direction * spot_points_needed
     years = _time_to_expiry_years()
+    implied_barrier = _solve_implied_barrier_spot(spot, strike, side, iv / 100, years, barrier_price)
+    if implied_barrier is None:
+        return None
     return touch_probability(spot, implied_barrier, iv / 100, years)
-
-
-def _solve_spot_points_for_price_move(delta: float, gamma: float, price_move_needed: float) -> float | None:
-    """Smallest |dS| >= 0 solving 0.5*gamma*dS^2 + delta*dS = price_move_needed,
-    i.e. the SPX distance (in the option-price-increasing direction) needed
-    for a delta+gamma local move to reach price_move_needed. Falls back to
-    the pure-delta linear solution when gamma is 0/negligible (e.g. missing
-    from the quote) so behavior degrades gracefully rather than erroring.
-
-    price_move_needed may be negative (option's mark is already past the
-    barrier) -- the linear term's sign handles that the same way the old
-    delta-only code did; gamma only matters once dS is a few points out.
-    """
-    if abs(gamma) < 1e-9:
-        return price_move_needed / delta
-    # 0.5*gamma*dS^2 + delta*dS - price_move_needed = 0
-    a, b, c = 0.5 * gamma, delta, -price_move_needed
-    discriminant = b * b - 4 * a * c
-    if discriminant < 0:
-        # No real solution -- gamma's curvature works against reaching the
-        # barrier at all (can happen for a large opposing price_move_needed
-        # with small gamma); fall back to the linear estimate rather than
-        # returning None and silently dropping this leg's probability.
-        return price_move_needed / delta
-    sqrt_disc = discriminant**0.5
-    roots = [(-b + sqrt_disc) / (2 * a), (-b - sqrt_disc) / (2 * a)]
-    # Prefer the smallest-magnitude root -- the nearer barrier crossing is
-    # the one that actually matters for touch probability (a farther root,
-    # if any, would only be reached after already crossing the near one).
-    return min(roots, key=abs)
 
 
 def _leg_stop_probability(spot: float, contracts: dict, pos: dict, leg: dict, barrier: dict) -> float | None:
