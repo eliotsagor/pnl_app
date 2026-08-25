@@ -151,6 +151,7 @@ def _run_fetch_risk(job_id: str):
                 ev = position_ev.get(pos.get("serial"))
                 if ev is not None:
                     pos["stop_probability"] = ev["stop_probability"]
+                    pos["stop_probability_by_side"] = ev["stop_probability_by_side"]
                     pos["ev"] = ev["ev"]
                     pos["delta"] = ev["delta"]
                     pos["gamma"] = ev["gamma"]

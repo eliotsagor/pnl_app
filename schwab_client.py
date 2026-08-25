@@ -612,7 +612,17 @@ def position_side_stop_probability(spot: float, contracts: dict, pos: dict, side
     direction = 1 if side == "C" else -1
     implied_barrier = spot + direction * spot_points_needed
     years = _time_to_expiry_years()
-    return touch_probability(spot, implied_barrier, avg_iv / 100, years)
+    result = touch_probability(spot, implied_barrier, avg_iv / 100, years)
+    import os
+    if os.environ.get("PNL_DEBUG_STOP_PROB"):
+        strikes = ",".join(f"{leg['strike']}{leg['type']}" for leg in side_legs)
+        print(
+            f"[stop_prob:position] side={side} strikes={strikes} spot={spot} "
+            f"current={current} barrier_price={barrier['price']} price_move_needed={price_move_needed:.3f} "
+            f"net_delta={net_delta:.4f} avg_iv={avg_iv:.2f} spot_points_needed={spot_points_needed:.2f} "
+            f"implied_barrier={implied_barrier:.2f} -> p={result}"
+        )
+    return result
 
 
 def stop_probabilities_by_strike(positions: list[dict]) -> dict:
@@ -688,9 +698,9 @@ def stop_probabilities_by_strike(positions: list[dict]) -> dict:
 
 
 def position_expected_values(positions: list[dict]) -> dict:
-    """{serial: {'stop_probability': float, 'ev': float, 'delta': float,
-    'gamma': float}} -- for each open position, its own probability of
-    being stopped (see
+    """{serial: {'stop_probability': float, 'stop_probability_by_side':
+    {'C'|'P': float}, 'ev': float, 'delta': float, 'gamma': float}} -- for
+    each open position, its own probability of being stopped (see
     stop_probabilities_by_strike for how combined-stop "Elmo" positions are
     handled) and the expected value of continuing to hold it, built from
     each short leg's own current price and stop price rather than the
@@ -753,6 +763,26 @@ def position_expected_values(positions: list[dict]) -> dict:
         # stop existing and should still populate. The no-stop branch further
         # down re-derives p_stop as a pin-vs-ITM probability instead.
         p_stop = max(leg_probs) if leg_probs else None
+
+        # Per-side breakdown, for callers (the strikes table) that need each
+        # short leg's own side's probability rather than this position's
+        # overall max -- an independently-stopped two-sided position (e.g. a
+        # BIC-style call vertical and put vertical sharing one position
+        # object) can have a much lower put-side probability than its
+        # call-side, and attributing the position's overall max to a put
+        # strike would overstate that strike's real risk. Keyed by side
+        # ("C"/"P"), only for sides this position actually has a short leg
+        # on; a combined ("Elmo") position naturally gets the same value on
+        # both sides here, since stop_probs already reflects that sharing.
+        stop_probability_by_side = {}
+        if has_own_stop:
+            for side, side_legs in sides.items():
+                if not side_legs:
+                    continue
+                side_probs = [stop_probs.get((leg["strike"], leg["type"])) for leg in side_legs]
+                side_probs = [p for p in side_probs if p is not None]
+                if side_probs:
+                    stop_probability_by_side[side] = max(side_probs)
 
         # This position's own net delta/gamma -- unlike net_greeks (book-wide),
         # this is scoped to just this position's legs (both short and long,
@@ -856,6 +886,7 @@ def position_expected_values(positions: list[dict]) -> dict:
 
         out[pos.get("serial")] = {
             "stop_probability": stop_probability,
+            "stop_probability_by_side": stop_probability_by_side,
             "ev": ev,
             "delta": pos_delta,
             "gamma": pos_gamma,

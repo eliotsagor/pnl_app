@@ -73,7 +73,8 @@ export interface Position {
   at_risk?: number; // $ given back from today's value if the stop triggers -- see position_give_back
   remaining?: number; // $ still on the table if this decays to worthless by expiry -- see position_remaining_value
   side_split?: { C?: number; P?: number }; // for a two-sided position, each side's share (0-1) of captured/remaining/at_risk -- see position_side_split_weights
-  stop_probability?: number; // 0-1, probability this position's stop triggers before close
+  stop_probability?: number; // 0-1, probability this position's stop triggers before close (max across sides for a two-sided position)
+  stop_probability_by_side?: { C?: number; P?: number }; // 0-1, each side's OWN probability -- use this (not stop_probability) when attributing risk to one side's strike, since an independently-stopped two-sided position's sides can differ a lot
   ev?: number; // expected value of continuing to hold, $
   delta?: number; // this position's own net delta (short + long legs), underlying-equivalent shares
   gamma?: number; // this position's own net gamma

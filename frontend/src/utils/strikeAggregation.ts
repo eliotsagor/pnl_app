@@ -37,11 +37,18 @@ function shortStrikesBySide(position: Position): { C: Leg[]; P: Leg[] } {
  * table can be recomputed live from an arbitrary filtered subset of
  * positions (the Elmo/BIC/Other and per-bot checkboxes) without a round trip.
  * Per-strike stop_probability is the qty-weighted average of the
- * contributing positions' own stop_probability (already resolved
- * server-side, including the Elmo combined-stop handling), which reproduces
- * the same numbers the backend computes for the unfiltered case. ev uses
- * that same per-strike stop_probability against this strike's own already-
- * split remaining/at_risk, matching the backend's model. */
+ * contributing positions' own PER-SIDE stop_probability (pos.stop_probability_by_side,
+ * already resolved server-side, including the Elmo combined-stop handling),
+ * which reproduces the same numbers the backend computes for the unfiltered
+ * case. Uses pos.stop_probability_by_side[side], not the flat
+ * pos.stop_probability -- that field is the position's overall max across
+ * both sides, and for an independently-stopped two-sided position (e.g. a
+ * BIC call vertical and put vertical sharing one position object) the two
+ * sides' real probabilities can differ a lot, so using the flat max would
+ * incorrectly attribute the riskier side's probability to the other side's
+ * strike. ev uses that same per-strike stop_probability against this
+ * strike's own already-split remaining/at_risk, matching the backend's
+ * model. */
 export function aggregateShortStrikes(positions: Position[]): StrikeRow[] {
   const rows = new Map<string, StrikeRow & { probWeighted: number; probWeight: number }>();
 
@@ -103,8 +110,17 @@ export function aggregateShortStrikes(positions: Position[]): StrikeRow[] {
         row.positions += 1;
         row.is_bic = row.is_bic || pos.is_bic;
         row.is_elmo = row.is_elmo || pos.is_elmo;
-        if (pos.stop_probability != null) {
-          row.probWeighted += pos.stop_probability * legQty;
+        // This side's OWN probability, not pos.stop_probability (the
+        // position's overall max across both sides) -- for an
+        // independently-stopped two-sided position (e.g. a BIC call
+        // vertical and put vertical sharing one position object), the two
+        // sides' stop chances can be very different, and attributing the
+        // higher side's probability to the lower side's strike overstates
+        // that strike's real risk. Falls back to stop_probability for an
+        // older cached result that predates stop_probability_by_side.
+        const sideProb = pos.stop_probability_by_side?.[side] ?? pos.stop_probability;
+        if (sideProb != null) {
+          row.probWeighted += sideProb * legQty;
           row.probWeight += legQty;
         }
       }
