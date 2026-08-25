@@ -391,25 +391,35 @@ def position_side_split_weights(positions: list[dict], contracts: dict) -> dict:
 def option_price_barrier_probability(spot: float, strike: float, side: str, contract: dict, barrier_price: float) -> float | None:
     """P(this specific option's price crosses `barrier_price`) before
     expiry, by converting the option-price barrier into an implied SPX
-    barrier via the contract's own delta (first-order local approximation:
-    a dOptionPrice move corresponds to dOptionPrice / |delta| points of SPX
-    movement), then applying the same touch-probability formula to that
-    implied SPX level using the contract's own IV.
+    barrier via the contract's own delta *and* gamma (second-order local
+    approximation: d(option price) ~= delta*dS + 0.5*gamma*dS^2, solved for
+    dS -- not just dOptionPrice / |delta|), then applying the same
+    touch-probability formula to that implied SPX level using the
+    contract's own IV.
 
-    This is an approximation, not a full path-dependent option-price
-    barrier model (which would need to account for delta itself changing as
-    spot moves) -- but for a same-day 0DTE stop a few points away, the
-    local-linear approximation is standard practice and far better than
-    ignoring the option's convexity/vol entirely.
+    Plain delta-only linearization understates how fast an option's price
+    accelerates toward its stop as spot approaches the strike (gamma always
+    pushes the option's price in its own favor -- i.e. helps it move toward
+    a higher price/its stop -- for a bought-back short option, regardless of
+    call or put), so it understates stop probability once the position is
+    already fairly close to triggering. This is still a local approximation
+    (gamma itself isn't constant either, and IV is held fixed), not a full
+    path-dependent option-price barrier model -- but it's the standard next
+    order up, and matches the delta+gamma local model already used for the
+    book's +-10pt delta shock in net_greeks.
     """
     delta = contract.get("delta")
+    gamma = contract.get("gamma")
     iv = contract.get("volatility")
     mark = contract.get("mark") or contract.get("last")
     if not delta or not iv or iv <= 0 or mark is None:
         return None
     delta = abs(delta)
+    gamma = gamma if gamma is not None else 0.0
     price_move_needed = barrier_price - mark  # positive: option needs to gain value to hit the stop
-    spot_points_needed = price_move_needed / delta
+    spot_points_needed = _solve_spot_points_for_price_move(delta, gamma, price_move_needed)
+    if spot_points_needed is None:
+        return None
     # A short call's price rises as spot rises; a short put's price rises as
     # spot falls -- so the SPX barrier is spot +points for a call's stop,
     # spot -points for a put's stop (points itself may be negative if the
@@ -418,6 +428,36 @@ def option_price_barrier_probability(spot: float, strike: float, side: str, cont
     implied_barrier = spot + direction * spot_points_needed
     years = _time_to_expiry_years()
     return touch_probability(spot, implied_barrier, iv / 100, years)
+
+
+def _solve_spot_points_for_price_move(delta: float, gamma: float, price_move_needed: float) -> float | None:
+    """Smallest |dS| >= 0 solving 0.5*gamma*dS^2 + delta*dS = price_move_needed,
+    i.e. the SPX distance (in the option-price-increasing direction) needed
+    for a delta+gamma local move to reach price_move_needed. Falls back to
+    the pure-delta linear solution when gamma is 0/negligible (e.g. missing
+    from the quote) so behavior degrades gracefully rather than erroring.
+
+    price_move_needed may be negative (option's mark is already past the
+    barrier) -- the linear term's sign handles that the same way the old
+    delta-only code did; gamma only matters once dS is a few points out.
+    """
+    if abs(gamma) < 1e-9:
+        return price_move_needed / delta
+    # 0.5*gamma*dS^2 + delta*dS - price_move_needed = 0
+    a, b, c = 0.5 * gamma, delta, -price_move_needed
+    discriminant = b * b - 4 * a * c
+    if discriminant < 0:
+        # No real solution -- gamma's curvature works against reaching the
+        # barrier at all (can happen for a large opposing price_move_needed
+        # with small gamma); fall back to the linear estimate rather than
+        # returning None and silently dropping this leg's probability.
+        return price_move_needed / delta
+    sqrt_disc = discriminant**0.5
+    roots = [(-b + sqrt_disc) / (2 * a), (-b - sqrt_disc) / (2 * a)]
+    # Prefer the smallest-magnitude root -- the nearer barrier crossing is
+    # the one that actually matters for touch probability (a farther root,
+    # if any, would only be reached after already crossing the near one).
+    return min(roots, key=abs)
 
 
 def _leg_stop_probability(spot: float, contracts: dict, pos: dict, leg: dict, barrier: dict) -> float | None:
