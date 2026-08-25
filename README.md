@@ -24,8 +24,8 @@ pnl_app/
 ├── frontend/                # Vite + React + TypeScript + MUI
 │   └── src/{api,pages,components,hooks,utils}/
 ├── scripts/
-│   ├── dev.ps1              # dev mode: backend --reload + Vite dev server (2 windows)
-│   └── start.ps1            # daily-use mode: one process, builds frontend if needed
+│   ├── dev.ps1 / dev.sh      # dev mode: backend --reload + Vite dev server (2 windows)
+│   └── start.ps1 / start.sh  # daily-use mode: one process, builds frontend if needed
 ├── database.py              # SQLite schema + CRUD (imported by both UIs, unchanged)
 ├── tradesteward_fetch.py    # Fetch P&L from the TradeSteward endpoint (Playwright)
 ├── ingest.py                # fetch -> map to sheets -> save (single day or backfill)
@@ -39,20 +39,28 @@ pnl_app/
 
 ## Setup
 
-**Easiest: double-click `start_app.bat`.** First run creates the Python venv,
-installs backend + frontend dependencies, and opens the app in your browser
-at http://localhost:8000. Every run after that just starts the server — no
-commands to type. Requires Python and Node.js already installed
+**Windows — easiest: double-click `start_app.bat`.** First run creates the
+Python venv, installs backend + frontend dependencies, and opens the app in
+your browser at http://localhost:8000. Every run after that just starts the
+server — no commands to type. Requires Python and Node.js already installed
 (https://python.org, https://nodejs.org); the script will tell you if either
 is missing.
 
-If you'd rather set it up by hand (or the double-click script doesn't work
-for you):
+**macOS/Linux — easiest: run `./start_app.sh`** (double-clickable from
+Finder once marked as an app, or just run it from Terminal). Does the same
+first-run setup as `start_app.bat` above.
 
-```powershell
+```bash
 cd pnl_app
-python -m venv .venv
-.venv\Scripts\activate
+./start_app.sh
+```
+
+If you'd rather set it up by hand (or the script doesn't work for you):
+
+```bash
+cd pnl_app
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 playwright install chromium      # first install only
 
@@ -61,21 +69,28 @@ npm install
 cd ..
 
 # Put your empty template here (the original .xlsx with no values filled in)
-copy $env:USERPROFILE\Downloads\2026-_Daily_PnL_By_Strategy.xlsx .\template.xlsx
+cp ~/Downloads/2026-_Daily_PnL_By_Strategy.xlsx ./template.xlsx
 
 # Set your API key if you'll use the screenshot-upload fallback (get one from https://console.anthropic.com/)
-$env:ANTHROPIC_API_KEY = "sk-ant-..."
+export ANTHROPIC_API_KEY="sk-ant-..."
 ```
+
+(Windows PowerShell equivalent: `python -m venv .venv`, `.venv\Scripts\activate`,
+`copy $env:USERPROFILE\Downloads\...  .\template.xlsx`,
+`$env:ANTHROPIC_API_KEY = "sk-ant-..."`.)
 
 ## Running it
 
 **Day to day:**
 
 ```powershell
-.\scripts\start.ps1
+.\scripts\start.ps1     # Windows
+```
+```bash
+./scripts/start.sh      # macOS/Linux
 ```
 
-Builds the frontend once (skips the build if `frontend\dist` already exists —
+Builds the frontend once (skips the build if `frontend/dist` already exists —
 delete it, or re-run `npm run build` in `frontend/`, after pulling frontend
 changes) and runs a single server at **http://localhost:8000**, opening it in
 your browser automatically.
@@ -83,11 +98,17 @@ your browser automatically.
 **While developing** (auto-reloading backend + Vite hot-reload):
 
 ```powershell
-.\scripts\dev.ps1
+.\scripts\dev.ps1       # Windows
+```
+```bash
+./scripts/dev.sh        # macOS
 ```
 
 Opens two windows — backend on :8000, frontend dev server on :5173 (proxies
 `/api/*` to :8000). Use **http://localhost:5173** while this is running.
+(`dev.sh` opens two Terminal.app windows via `osascript`; Linux users should
+just run the two commands from `dev.ps1`'s Windows version manually in two
+terminals instead.)
 
 ## Fetching straight from TradeSteward
 
@@ -110,15 +131,22 @@ terminal.
 sign in, prints strategy totals for a day):
 
 ```powershell
-.\.venv\Scripts\python.exe tradesteward_fetch.py --day 2026-07-30
+.\.venv\Scripts\python.exe tradesteward_fetch.py --day 2026-07-30    # Windows
+```
+```bash
+.venv/bin/python tradesteward_fetch.py --day 2026-07-30               # macOS/Linux
 ```
 
 **Catch up the database** from the command line (weekdays only, one browser
 session — sign in when the window opens, then it runs unattended):
 
 ```powershell
-.\.venv\Scripts\python.exe ingest.py --apply-suggested-mappings   # add the LCV / LPV / Thursday RIC labels
+.\.venv\Scripts\python.exe ingest.py --apply-suggested-mappings   # Windows, add the LCV / LPV / Thursday RIC labels
 .\.venv\Scripts\python.exe ingest.py --backfill 2026-04-07
+```
+```bash
+.venv/bin/python ingest.py --apply-suggested-mappings              # macOS/Linux
+.venv/bin/python ingest.py --backfill 2026-04-07
 ```
 
 Any strategy label the endpoint emits that isn't in the mapping gets a **new
@@ -144,18 +172,26 @@ overlay, each person running the app needs **their own** Schwab developer app
    `https://127.0.0.1:8080`. Wait for the app status to show "Ready For Use"
    (can take a day or so after creation).
 2. Store the app key/secret locally (prompts for both, hidden input, saved to
-   Windows Credential Manager — never written to disk in plaintext):
+   the OS credential store — Windows Credential Manager, macOS Keychain, or
+   Linux Secret Service — never written to disk in plaintext):
    ```powershell
-   .\.venv\Scripts\python.exe schwab_client.py --set-credentials
+   .\.venv\Scripts\python.exe schwab_client.py --set-credentials    # Windows
+   ```
+   ```bash
+   .venv/bin/python schwab_client.py --set-credentials              # macOS/Linux
    ```
 3. Do the one-time OAuth browser consent (opens a browser to Schwab's login
    page, then redirects to `https://127.0.0.1:8080`; expect a self-signed-cert
    warning there — proceed past it):
    ```powershell
-   .\.venv\Scripts\python.exe schwab_client.py --login
+   .\.venv\Scripts\python.exe schwab_client.py --login    # Windows
+   ```
+   ```bash
+   .venv/bin/python schwab_client.py --login               # macOS/Linux
    ```
    If that fails to catch the redirect automatically (e.g. the cert warning
-   has no bypass option), use the copy-paste fallback instead:
+   has no bypass option), use the copy-paste fallback instead (swap in
+   `.venv/bin/python` on macOS/Linux):
    ```powershell
    .\.venv\Scripts\python.exe schwab_client.py --login-manual
    ```

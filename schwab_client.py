@@ -5,12 +5,14 @@ yfinance, so this is the only source for a market-implied expected move.
 
 Auth uses schwab-py's OAuth wrapper: the first run opens a browser to Schwab's
 login/consent page, then schwab-py exchanges the resulting code for a token
-and refreshes it automatically afterwards. Client key/secret are stored in
-Windows Credential Manager via keyring -- same pattern as
-tradesteward_fetch.py's credential storage -- never written to disk in
-plaintext. The refresh/access token pair itself is written by schwab-py to
-TOKEN_PATH (its own on-disk cache, standard for this library); that file is
-gitignored, just like the TradeSteward browser profile.
+and refreshes it automatically afterwards. Client key/secret are stored via
+the `keyring` library in the OS's native credential store (Windows Credential
+Manager, macOS Keychain, or the Linux Secret Service, whichever this machine
+has) -- same pattern as tradesteward_fetch.py's credential storage -- never
+written to disk in plaintext. The refresh/access token pair itself is
+written by schwab-py to TOKEN_PATH (its own on-disk cache, standard for this
+library); that file is gitignored, just like the TradeSteward browser
+profile.
 
 Run `python schwab_client.py --set-credentials` once per machine to store the
 app key/secret, then `python schwab_client.py --login` once to do the
@@ -954,7 +956,7 @@ def main():
     ap.add_argument(
         "--set-credentials",
         action="store_true",
-        help="Store your Schwab app key/secret in Windows Credential Manager. "
+        help="Store your Schwab app key/secret in the OS's credential store. "
         "Prompts for both (hidden input); never written to disk in plaintext.",
     )
     ap.add_argument("--clear-credentials", action="store_true", help="Remove saved app key/secret.")
@@ -978,7 +980,7 @@ def main():
         app_key = input("Schwab app key: ").strip()
         app_secret = getpass.getpass("Schwab app secret: ")
         save_credentials(app_key, app_secret)
-        print(">>> Saved Schwab app credentials to Windows Credential Manager.")
+        print(">>> Saved Schwab app credentials to the OS credential store.")
         return
 
     if args.clear_credentials:
